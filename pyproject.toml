@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tradingagent-001"
+version = "0.1.0"
+description = "Zero-fee local Windows 10 MT5 multi-agent scalping & intraday trading engine (Gold-first XAUUSD priority)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.8.0",
+    "pydantic-settings>=2.4.0",
+    "httpx>=0.27.0",
+    "pandas>=2.2.0",
+    "numpy>=1.26.0",
+    "scipy>=1.13.0",
+    "pyarrow>=16.0.0",
+    "duckdb>=1.0.0",
+    "rich>=13.7.0",
+    "typer>=0.12.0",
+    "pyyaml>=6.0.1",
+]
+
+[project.optional-dependencies]
+windows = [
+    "MetaTrader5>=5.0.45; sys_platform == 'win32'",
+]
+research = [
+    "vectorbt>=1.0.0",
+    "nautilus_trader>=1.200.0",
+]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[project.scripts]
+tradingagent = "tradingagent.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]

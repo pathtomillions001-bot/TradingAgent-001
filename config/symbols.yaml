@@ -1,0 +1,81 @@
+# Symbol Priority & Microstructure Configuration
+# Tier 1: Gold (Primary focus — scanned first on every cycle)
+# Tier 2: High-beta Indices & Crypto (scanned when Gold has no A/A+ setup or max Gold positions open)
+# Tier 3: Major Forex Pairs (scanned as clean intraday fallbacks, guarded by Net USD Correlation Cap)
+
+priority_tiers:
+  tier_1_primary:
+    - canonical: "XAUUSD"
+      aliases: ["XAUUSD", "XAUUSDm", "XAUUSD.pro", "XAUUSD.raw", "GOLD", "GOLDm", "XAUUSD.a"]
+      asset_class: "metal"
+      usd_direction_sign: -1   # Long XAUUSD = Short USD (-1)
+      contract_size: 100.0     # 1 standard lot = 100 troy oz
+      point: 0.01
+      pip_size: 0.10           # $0.10 = 1 pip on Gold
+      max_spread_points: 35    # Reject scalp if spread > $0.35 (3.5 pips)
+      max_spread_to_sl_ratio: 0.12
+      prime_sessions_utc:
+        - [7, 11]              # London Open & Morning
+        - [12, 17]             # NY Open & London/NY Overlap
+
+  tier_2_high_beta:
+    - canonical: "NAS100"
+      aliases: ["NAS100", "US100", "USTEC", "USTECm", "NAS100.cash", "US100.cash", "NDX100"]
+      asset_class: "index"
+      usd_direction_sign: 0    # Equity risk beta (non-FX direct USD pair)
+      contract_size: 1.0
+      point: 0.01
+      pip_size: 1.0            # 1 index point
+      max_spread_points: 220   # 2.2 index points max spread
+      max_spread_to_sl_ratio: 0.12
+      prime_sessions_utc:
+        - [13, 20]             # NY Pre-Market, Cash Open & Afternoon
+
+    - canonical: "BTCUSD"
+      aliases: ["BTCUSD", "BTCUSDm", "BTCUSDT", "BTCUSD.pro", "BITCOIN"]
+      asset_class: "crypto"
+      usd_direction_sign: -1   # Long BTCUSD = Short USD (-1)
+      contract_size: 1.0
+      point: 0.01
+      pip_size: 1.0
+      max_spread_points: 3500  # $35 max spread on BTC CFD
+      max_spread_to_sl_ratio: 0.14
+      prime_sessions_utc:
+        - [0, 24]              # 24/7 (especially valuable when Gold/FX are quiet or closed)
+
+  tier_3_fx_majors:
+    - canonical: "EURUSD"
+      aliases: ["EURUSD", "EURUSDm", "EURUSD.pro", "EURUSD.raw", "EURUSD.a"]
+      asset_class: "forex"
+      usd_direction_sign: -1   # Long EURUSD = Short USD (-1)
+      contract_size: 100000.0
+      point: 0.00001
+      pip_size: 0.0001
+      max_spread_points: 15    # 1.5 pips max spread
+      max_spread_to_sl_ratio: 0.12
+      prime_sessions_utc:
+        - [7, 16]              # London + NY Overlap
+
+    - canonical: "GBPUSD"
+      aliases: ["GBPUSD", "GBPUSDm", "GBPUSD.pro", "GBPUSD.raw", "GBPUSD.a"]
+      asset_class: "forex"
+      usd_direction_sign: -1   # Long GBPUSD = Short USD (-1)
+      contract_size: 100000.0
+      point: 0.00001
+      pip_size: 0.0001
+      max_spread_points: 18    # 1.8 pips max spread
+      max_spread_to_sl_ratio: 0.12
+      prime_sessions_utc:
+        - [7, 16]              # London + NY Overlap
+
+    - canonical: "USDCAD"
+      aliases: ["USDCAD", "USDCADm", "USDCAD.pro", "USDCAD.raw", "USDCAD.a"]
+      asset_class: "forex"
+      usd_direction_sign: 1    # Long USDCAD = Long USD (+1)
+      contract_size: 100000.0
+      point: 0.00001
+      pip_size: 0.0001
+      max_spread_points: 20    # 2.0 pips max spread
+      max_spread_to_sl_ratio: 0.12
+      prime_sessions_utc:
+        - [12, 17]             # NY & CAD Session

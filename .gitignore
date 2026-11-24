@@ -1,0 +1,38 @@
+# Python & Virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+coverage/
+.coverage
+
+# Secrets & Local Config Overrides
+.env
+*.env.local
+secrets/
+
+# Local Runtime Databases, Logs & Market Data Catalogs (keep out of Git)
+data/
+logs/
+*.db
+*.sqlite
+*.sqlite3
+*.duckdb
+*.duckdb.wal
+*.parquet
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
