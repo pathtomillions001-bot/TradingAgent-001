@@ -1,0 +1,122 @@
+"""Broker Adapter Protocol & Broker Symbol Auto-Mapper."""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+import pandas as pd
+
+from tradingagent.config import SymbolProfile
+from tradingagent.models import (
+    AccountSnapshot,
+    ExecutionReceipt,
+    OpenPosition,
+    QuoteTick,
+    Side,
+)
+
+
+class SymbolMapper:
+    """Maps canonical names (XAUUSD, NAS100, etc.) to broker-specific symbols (XAUUSDm, USTEC, etc.)."""
+
+    def __init__(self, profiles: dict[str, SymbolProfile]) -> None:
+        self.profiles = profiles
+        self.canonical_to_broker: dict[str, str] = {}
+        self.broker_to_canonical: dict[str, str] = {}
+
+    def discover(self, available_broker_symbols: list[str]) -> dict[str, str]:
+        available_set = set(available_broker_symbols)
+        lower_map = {s.lower(): s for s in available_broker_symbols}
+
+        for canonical, prof in self.profiles.items():
+            matched = None
+            # 1. Exact alias match
+            for alias in prof.aliases:
+                if alias in available_set:
+                    matched = alias
+                    break
+            # 2. Case-insensitive alias match
+            if not matched:
+                for alias in prof.aliases:
+                    if alias.lower() in lower_map:
+                        matched = lower_map[alias.lower()]
+                        break
+            # 3. Prefix match (e.g. XAUUSD_i, XAUUSD.ecn)
+            if not matched:
+                for b_sym in available_broker_symbols:
+                    if b_sym.upper().startswith(canonical.upper()):
+                        matched = b_sym
+                        break
+
+            if matched:
+                self.canonical_to_broker[canonical] = matched
+                self.broker_to_canonical[matched] = canonical
+
+        return dict(self.canonical_to_broker)
+
+    def to_broker(self, canonical: str) -> str:
+        return self.canonical_to_broker.get(canonical, canonical)
+
+    def to_canonical(self, broker_symbol: str) -> str:
+        return self.broker_to_canonical.get(broker_symbol, broker_symbol)
+
+
+class BrokerAdapter(ABC):
+    """Unified interface for Native Windows MetaTrader5 IPC and Local Paper Simulator."""
+
+    @abstractmethod
+    def connect(self) -> bool:
+        ...
+
+    @abstractmethod
+    def disconnect(self) -> None:
+        ...
+
+    @abstractmethod
+    def is_connected(self) -> bool:
+        ...
+
+    @abstractmethod
+    def list_available_symbols(self) -> list[str]:
+        ...
+
+    @abstractmethod
+    def get_account_snapshot(self) -> AccountSnapshot:
+        ...
+
+    @abstractmethod
+    def get_quote(self, canonical_symbol: str) -> QuoteTick:
+        ...
+
+    @abstractmethod
+    def get_bars(self, canonical_symbol: str, timeframe: str = "M5", count: int = 300) -> pd.DataFrame:
+        ...
+
+    @abstractmethod
+    def get_open_positions(self) -> list[OpenPosition]:
+        ...
+
+    @abstractmethod
+    def place_market_order(
+        self,
+        canonical_symbol: str,
+        side: Side,
+        volume: float,
+        sl: float,
+        tp: float,
+        comment: str = "TA001",
+        initial_risk_usd: float = 0.0,
+        setup_type: str = "AGENT",
+    ) -> ExecutionReceipt:
+        ...
+
+    @abstractmethod
+    def modify_position_sl_tp(self, ticket: int, new_sl: float, new_tp: float) -> bool:
+        ...
+
+    @abstractmethod
+    def close_position(self, ticket: int, volume: float | None = None, reason: str = "MANUAL") -> ExecutionReceipt:
+        ...
+
+    @abstractmethod
+    def close_all_positions(self, reason: str = "KILL_SWITCH") -> list[ExecutionReceipt]:
+        ...
