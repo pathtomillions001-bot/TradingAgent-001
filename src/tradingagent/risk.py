@@ -93,13 +93,19 @@ class DeterministicRiskFirewall:
 
         raw_lots = target_risk_usd / loss_per_one_lot
         step = quote.volume_step if quote.volume_step > 0 else 0.01
-        # Floor to volume_step so we NEVER exceed target_risk_usd
+        # Floor to volume_step so we NEVER exceed target_risk_usd on standard sizing
         floored_lots = math.floor(raw_lots / step) * step
         decimals = max(0, int(round(-math.log10(step)))) if step < 1 else 0
         lots = round(floored_lots, decimals)
 
         if lots < quote.volume_min:
-            return 0.0, 0.0
+            min_lot_risk_usd = round(quote.volume_min * loss_per_one_lot, 2)
+            min_lot_risk_pct = (min_lot_risk_usd / equity) * 100.0
+            # Micro-account guard: allow broker minimum lot (0.01) ONLY if its exact risk <= max_min_lot_risk_pct
+            if min_lot_risk_pct <= self.settings.max_min_lot_risk_pct:
+                return round(quote.volume_min, decimals), min_lot_risk_usd
+            return 0.0, min_lot_risk_usd
+
         lots = min(lots, quote.volume_max)
         actual_risk_usd = round(lots * loss_per_one_lot, 2)
         return lots, actual_risk_usd
@@ -161,14 +167,15 @@ class DeterministicRiskFirewall:
         else:
             passed.append("Cooldown clear")
 
-        # 5. Live Spread & Broker Stops-Level Check
+        # 5. Live Spread & Broker Stops-Level Check (normalized to canonical profile points)
         fill_price = quote.ask if setup.side == Side.LONG else quote.bid
-        if quote.spread_points > prof.max_spread_points:
+        live_canonical_spread = prof.canonical_spread_points(quote.spread_price)
+        if live_canonical_spread > prof.max_spread_points:
             rejections.append(
-                f"SPREAD_SPIKE: Live spread {quote.spread_points:.1f} pts > max {prof.max_spread_points:.1f} pts"
+                f"SPREAD_SPIKE: Live spread {live_canonical_spread:.1f} pts > max {prof.max_spread_points:.1f} pts"
             )
         else:
-            passed.append(f"Live spread {quote.spread_points:.1f} pts <= {prof.max_spread_points:.1f}")
+            passed.append(f"Live spread {live_canonical_spread:.1f} pts <= {prof.max_spread_points:.1f}")
 
         sl_dist = abs(fill_price - setup.stop_loss)
         tp_dist = abs(setup.take_profit - fill_price)
@@ -201,7 +208,12 @@ class DeterministicRiskFirewall:
             quote=quote,
         )
         if lots <= 0:
-            rejections.append("LOT_SIZE_BELOW_MIN: Account equity/risk% too small for SL distance at broker min lot.")
+            min_pct = (actual_risk_usd / account.equity * 100.0) if account.equity > 0 else 0.0
+            rejections.append(
+                f"LOT_SIZE_BELOW_MIN: Min lot {quote.volume_min:.2f} risks ${actual_risk_usd:.2f} "
+                f"({min_pct:.2f}% > {self.settings.max_min_lot_risk_pct:.2f}% cap)."
+            )
+            actual_risk_usd = 0.0
         else:
             passed.append(f"Calculated {lots:.2f} lots (${actual_risk_usd:.2f} risk)")
 
@@ -256,7 +268,10 @@ class DeterministicRiskFirewall:
             if initial_r_dist <= 0:
                 continue
 
-            q = broker.get_quote(pos.symbol)
+            try:
+                q = broker.get_quote(pos.symbol)
+            except Exception:
+                continue
             favorable_move = (
                 (q.bid - pos.entry_price) if pos.side == Side.LONG else (pos.entry_price - q.ask)
             )

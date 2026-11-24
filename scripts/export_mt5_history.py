@@ -22,11 +22,14 @@ def export_broker_history(timeframe: str = "M5", bars: int = 20000) -> list[Path
 
     try:
         for sym in profiles:
-            df: pd.DataFrame = adapter.get_bars(sym, timeframe=timeframe, count=bars)
-            path = out_dir / f"{sym}_{timeframe}.parquet"
-            df.to_parquet(path, index=False)
-            saved.append(path)
-            print(f"Saved {len(df):,} bars for {sym} -> {path}")
+            try:
+                df: pd.DataFrame = adapter.get_bars(sym, timeframe=timeframe, count=bars)
+                path = out_dir / f"{sym}_{timeframe}.parquet"
+                df.to_parquet(path, index=False)
+                saved.append(path)
+                print(f"Saved {len(df):,} bars for {sym} ({adapter.mapper.to_broker(sym)}) -> {path}")
+            except Exception as exc:
+                print(f"Skipped {sym} ({adapter.mapper.to_broker(sym)}): {exc}")
     finally:
         adapter.disconnect()
 

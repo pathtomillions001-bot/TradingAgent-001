@@ -62,13 +62,22 @@ class TradingAgentEngine:
         candidates = self.scanner.scan_prioritized(self.broker, open_positions, now_utc=scan_time)
 
         evaluated_results: list[dict[str, Any]] = []
+        gold_executed = False
         for cand in candidates:
+            # Gold-First focus: if XAUUSD just executed on this cycle, skip lower-tier fallbacks
+            if gold_executed and cand.symbol != "XAUUSD":
+                continue
+
             decision = await self.committee.evaluate_candidate(cand)
             risk_res: RiskCheckResult | None = None
             receipt: ExecutionReceipt | None = None
 
             should_exec = decision.action in (AgentAction.EXECUTE_LONG, AgentAction.EXECUTE_SHORT)
-            quote = self.broker.get_quote(cand.symbol)
+            try:
+                quote = self.broker.get_quote(cand.symbol)
+            except Exception:
+                continue
+
             risk_res = self.risk.validate_and_size(
                 setup=cand,
                 account=account,
@@ -89,6 +98,8 @@ class TradingAgentEngine:
                 )
                 if receipt.success:
                     self.risk.record_trade_timestamp(cand.symbol)
+                    if cand.symbol == "XAUUSD":
+                        gold_executed = True
 
             self.memory.record_audit_cycle(
                 setup_dict=cand.model_dump(mode="json"),

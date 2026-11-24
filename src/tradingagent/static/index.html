@@ -321,6 +321,9 @@
     async function fetchStatus() {
       try {
         const res = await fetch('/api/status');
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
         const data = await res.json();
 
         currentKillSwitch = data.kill_switch_active;
@@ -335,7 +338,7 @@
         document.getElementById('brainStatus').textContent =
           `Brain: ${data.ollama.active_brain} | Broker: ${data.account.server}`;
 
-        document.getElementById('kpiEquity').textContent = `$${data.account.equity.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+        document.getElementById('kpiEquity').textContent = `$${data.account.equity.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
         document.getElementById('kpiBalance').textContent =
           `Balance: $${data.account.balance.toFixed(2)} | Free Margin: $${data.account.free_margin.toFixed(2)}`;
 
@@ -352,16 +355,33 @@
 
         // Watchlist
         const wlBody = document.getElementById('watchlistBody');
-        wlBody.innerHTML = data.watchlist.map(w => `
-          <tr>
-            <td><span class="badge">T${w.tier}</span></td>
-            <td style="font-weight:700; color:${w.symbol === 'XAUUSD' ? 'var(--gold)' : 'var(--text)'}">${w.symbol}</td>
-            <td>${w.bid}</td>
-            <td>${w.ask}</td>
-            <td>${w.spread_points} / ${w.max_spread_points} pts</td>
-            <td><span class="badge ${w.spread_ok ? 'badge-green' : 'badge-red'}">${w.spread_ok ? 'READY' : 'WIDE'}</span></td>
-          </tr>
-        `).join('');
+        wlBody.innerHTML = data.watchlist.map(w => {
+          const brokerSub = (w.broker_symbol && w.broker_symbol !== w.symbol)
+            ? ` <span style="font-weight:400; font-size:0.74rem; color:var(--muted);">(${w.broker_symbol})</span>`
+            : '';
+          if (w.available === false) {
+            return `
+              <tr>
+                <td><span class="badge">T${w.tier}</span></td>
+                <td style="font-weight:700; color:var(--muted)">${w.symbol}${brokerSub}</td>
+                <td>—</td>
+                <td>—</td>
+                <td>—</td>
+                <td><span class="badge badge-red">OFFLINE</span></td>
+              </tr>
+            `;
+          }
+          return `
+            <tr>
+              <td><span class="badge">T${w.tier}</span></td>
+              <td style="font-weight:700; color:${w.symbol === 'XAUUSD' ? 'var(--gold)' : 'var(--text)'}">${w.symbol}${brokerSub}</td>
+              <td>${w.bid}</td>
+              <td>${w.ask}</td>
+              <td>${w.spread_points} / ${w.max_spread_points} pts</td>
+              <td><span class="badge ${w.spread_ok ? 'badge-green' : 'badge-red'}">${w.spread_ok ? 'READY' : 'WIDE'}</span></td>
+            </tr>
+          `;
+        }).join('');
 
         // Open Positions
         const posBody = document.getElementById('positionsBody');
@@ -435,9 +455,14 @@
 
     async function runScanCycle(autoExec) {
       showToast(autoExec ? 'Running Gold-First Scanner + Multi-Agent Committee + Risk Gate...' : 'Running Read-Only Dry Scan...');
-      const res = await fetch(`/api/scan?auto_execute=${autoExec}`, { method: 'POST' });
-      const out = await res.json();
-      showToast(`Cycle finished: ${out.candidates_found} candidate setup(s) evaluated.`);
+      try {
+        const res = await fetch(`/api/scan?auto_execute=${autoExec}`, { method: 'POST' });
+        if (!res.ok) throw new Error(`Scan HTTP ${res.status}`);
+        const out = await res.json();
+        showToast(`Cycle finished: ${out.candidates_found} candidate setup(s) evaluated.`);
+      } catch (err) {
+        showToast(`Scan error: ${err.message}`);
+      }
       await fetchStatus();
     }
 
@@ -460,37 +485,42 @@
       const outEl = document.getElementById('btOutput');
       outEl.innerHTML = `Running spread-aware event simulation on <b>${symbol}</b> (${bars} M5 bars)...`;
 
-      const res = await fetch('/api/backtest', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbol, bars, starting_equity: 10000 })
-      });
-      const data = await res.json();
-      const q = data.raw_quant_baseline;
-      const a = data.agent_committee_filtered;
+      try {
+        const res = await fetch('/api/backtest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ symbol, bars, starting_equity: 10000 })
+        });
+        if (!res.ok) throw new Error(`Backtest HTTP ${res.status}`);
+        const data = await res.json();
+        const q = data.raw_quant_baseline;
+        const a = data.agent_committee_filtered;
 
-      outEl.innerHTML = `
-        <div class="bt-compare">
-          <div class="op-box">
-            <div style="color:var(--muted); font-weight:600;">Baseline: Raw Quant Only</div>
-            <div style="font-size:1.15rem; font-weight:700; margin:4px 0; color:${q.net_return_pct >= 0 ? 'var(--green)' : 'var(--red)'}">
-              ${q.net_return_pct >= 0 ? '+' : ''}${q.net_return_pct}% ($${q.ending_equity.toFixed(0)})
+        outEl.innerHTML = `
+          <div class="bt-compare">
+            <div class="op-box">
+              <div style="color:var(--muted); font-weight:600;">Baseline: Raw Quant Only</div>
+              <div style="font-size:1.15rem; font-weight:700; margin:4px 0; color:${q.net_return_pct >= 0 ? 'var(--green)' : 'var(--red)'}">
+                ${q.net_return_pct >= 0 ? '+' : ''}${q.net_return_pct}% ($${q.ending_equity.toFixed(0)})
+              </div>
+              <div>Trades: <b>${q.total_trades}</b> | Win Rate: <b>${q.win_rate_pct}%</b></div>
+              <div>Profit Factor: <b>${q.profit_factor}</b> | Sharpe: <b>${q.sharpe_ratio}</b></div>
+              <div>Max DD: <b>${q.max_drawdown_pct}%</b> | Spread Paid: $${q.spread_cost_usd}</div>
             </div>
-            <div>Trades: <b>${q.total_trades}</b> | Win Rate: <b>${q.win_rate_pct}%</b></div>
-            <div>Profit Factor: <b>${q.profit_factor}</b> | Sharpe: <b>${q.sharpe_ratio}</b></div>
-            <div>Max DD: <b>${q.max_drawdown_pct}%</b> | Spread Paid: $${q.spread_cost_usd}</div>
-          </div>
-          <div class="op-box" style="border-color: var(--gold);">
-            <div style="color:var(--gold); font-weight:600;">Full Agent Committee + Risk Gate</div>
-            <div style="font-size:1.15rem; font-weight:700; margin:4px 0; color:${a.net_return_pct >= 0 ? 'var(--green)' : 'var(--red)'}">
-              ${a.net_return_pct >= 0 ? '+' : ''}${a.net_return_pct}% ($${a.ending_equity.toFixed(0)})
+            <div class="op-box" style="border-color: var(--gold);">
+              <div style="color:var(--gold); font-weight:600;">Full Agent Committee + Risk Gate</div>
+              <div style="font-size:1.15rem; font-weight:700; margin:4px 0; color:${a.net_return_pct >= 0 ? 'var(--green)' : 'var(--red)'}">
+                ${a.net_return_pct >= 0 ? '+' : ''}${a.net_return_pct}% ($${a.ending_equity.toFixed(0)})
+              </div>
+              <div>Trades: <b>${a.total_trades}</b> | Win Rate: <b>${a.win_rate_pct}%</b></div>
+              <div>Profit Factor: <b>${a.profit_factor}</b> | Sharpe: <b>${a.sharpe_ratio}</b></div>
+              <div>Max DD: <b>${a.max_drawdown_pct}%</b> | Spread Paid: $${a.spread_cost_usd}</div>
             </div>
-            <div>Trades: <b>${a.total_trades}</b> | Win Rate: <b>${a.win_rate_pct}%</b></div>
-            <div>Profit Factor: <b>${a.profit_factor}</b> | Sharpe: <b>${a.sharpe_ratio}</b></div>
-            <div>Max DD: <b>${a.max_drawdown_pct}%</b> | Spread Paid: $${a.spread_cost_usd}</div>
           </div>
-        </div>
-      `;
+        `;
+      } catch (err) {
+        outEl.innerHTML = `<span style="color:var(--red);">Backtest failed: ${err.message}</span>`;
+      }
     }
 
     fetchStatus();

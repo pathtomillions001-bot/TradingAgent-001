@@ -43,6 +43,55 @@ def test_symbol_auto_mapper_discovers_broker_suffixes() -> None:
     assert discovered["BTCUSD"] == "BTCUSDm"
     assert mapper.to_canonical("USTEC") == "NAS100"
 
+    # Exact JustMarkets-Demo symbol list regression test
+    jm_mapper = SymbolMapper(profiles)
+    jm_symbols = [
+        "EURUSD.m", "GBPUSD.m", "USDCAD.m", "XAUUSD.m", "XAUAUD.m",
+        "XAUEUR.m", "BTCUSD.m", "BTCEUR.m", "UK100.std", "US100.std",
+    ]
+    jm_discovered = jm_mapper.discover(jm_symbols)
+    assert jm_discovered["XAUUSD"] == "XAUUSD.m"
+    assert jm_discovered["NAS100"] == "US100.std"
+    assert jm_discovered["BTCUSD"] == "BTCUSD.m"
+    assert jm_discovered["EURUSD"] == "EURUSD.m"
+    assert jm_discovered["GBPUSD"] == "GBPUSD.m"
+    assert jm_discovered["USDCAD"] == "USDCAD.m"
+
+
+def test_blank_env_fields_and_micro_account_lot_sizing(tmp_path: Path) -> None:
+    # Blank MT5_LOGIN="" and UTF-8 BOM in .env must never raise ValidationError
+    env_path = tmp_path / ".env"
+    env_path.write_bytes(b"\xef\xbb\xbfTRADING_MODE=paper\nMT5_LOGIN=\nMT5_PASSWORD=\nMT5_SERVER=\n")
+    s = AppSettings(_env_file=str(env_path), sqlite_path=tmp_path / "s.db", duckdb_path=tmp_path / "d.db")
+    assert s.mt5_login is None
+    assert s.mt5_password is None
+
+    # JustMarkets $374.38 Demo Account micro-lot sizing check
+    profiles = load_symbol_profiles()
+    firewall = DeterministicRiskFirewall(s, profiles)
+    gold_3digit_quote = QuoteTick(
+        symbol="XAUUSD",
+        broker_symbol="XAUUSD.m",
+        timestamp=datetime.now(timezone.utc),
+        bid=2910.000,
+        ask=2910.220,
+        point=0.001,       # 3-decimal broker quote
+        tick_value=0.10,   # $0.10 per 0.001 move on 1.0 lot ($100 per $1.00 move)
+        tick_size=0.001,
+    )
+    # Canonical spread must normalize $0.220 -> 22.0 canonical points (not 220!)
+    assert round(profiles["XAUUSD"].canonical_spread_points(gold_3digit_quote.spread_price), 1) == 22.0
+
+    # $4.20 SL on 0.01 lot = $4.20 risk = 1.12% of $374.38 (<= 1.25% micro cap -> approved at 0.01 lot)
+    lots_ok, risk_ok = firewall.calculate_exact_lots(374.38, 0.75, 4.20, gold_3digit_quote)
+    assert lots_ok == 0.01
+    assert risk_ok == 4.20
+
+    # $7.50 SL on 0.01 lot = $7.50 risk = 2.00% of $374.38 (> 1.25% micro cap -> safely blocked!)
+    lots_blocked, risk_blocked = firewall.calculate_exact_lots(374.38, 0.75, 7.50, gold_3digit_quote)
+    assert lots_blocked == 0.0
+    assert risk_blocked == 7.50
+
 
 def test_exact_lot_sizing_and_net_usd_correlation_guard(tmp_path: Path) -> None:
     settings = _make_test_settings(tmp_path)
@@ -222,3 +271,27 @@ def test_spread_aware_ablation_backtester_and_api(tmp_path: Path) -> None:
     r = client.get("/api/status")
     assert r.status_code == 200
     assert r.json()["watchlist"][0]["symbol"] == "XAUUSD"
+
+    # Regression test: /api/backtest inside running async event loop must succeed (HTTP 200)
+    bt_resp = client.post("/api/backtest", json={"symbol": "XAUUSD", "bars": 600, "starting_equity": 10000})
+    assert bt_resp.status_code == 200
+    assert bt_resp.json()["bars_tested"] == 600
+
+    # Regression test: if one symbol raises RuntimeError on broker, /api/status & /api/scan stay 200 OK
+    orig_get_quote = app.state.engine.broker.get_quote
+
+    def flaky_quote(sym: str) -> QuoteTick:
+        if sym == "NAS100":
+            raise RuntimeError("Failed to fetch MT5 tick/info for NAS100: (-4, 'Terminal: Not found')")
+        return orig_get_quote(sym)
+
+    app.state.engine.broker.get_quote = flaky_quote
+    r_degraded = client.get("/api/status")
+    assert r_degraded.status_code == 200
+    nas_entry = next(w for w in r_degraded.json()["watchlist"] if w["symbol"] == "NAS100")
+    assert nas_entry["available"] is False
+    gold_entry = next(w for w in r_degraded.json()["watchlist"] if w["symbol"] == "XAUUSD")
+    assert gold_entry["available"] is True
+
+    scan_degraded = client.post("/api/scan?auto_execute=false")
+    assert scan_degraded.status_code == 200

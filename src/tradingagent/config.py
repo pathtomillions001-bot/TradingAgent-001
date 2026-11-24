@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -33,11 +33,17 @@ class SymbolProfile(BaseModel):
                 return True
         return False
 
+    def canonical_spread_points(self, spread_price: float) -> float:
+        """Normalizes broker spread (in price units) into canonical profile points regardless of 2 vs 3 decimal MT5 quotes."""
+        if self.point <= 0:
+            return 0.0
+        return max(0.0, spread_price) / self.point
+
 
 class AppSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=str(ROOT_DIR / ".env"),
-        env_file_encoding="utf-8",
+        env_file_encoding="utf-8-sig",
         extra="ignore",
     )
 
@@ -49,6 +55,24 @@ class AppSettings(BaseSettings):
     mt5_password: str | None = None
     mt5_server: str | None = None
     mt5_magic_number: int = 2026001
+
+    @field_validator("mt5_login", mode="before")
+    @classmethod
+    def _empty_str_to_none_int(cls, v: Any) -> Any:
+        if v is None:
+            return None
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
+
+    @field_validator("mt5_password", "mt5_server", mode="before")
+    @classmethod
+    def _empty_str_to_none_str(cls, v: Any) -> Any:
+        if v is None:
+            return None
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
 
     # Zero-Fee Local Ollama / OpenAI-compatible LLM settings (tuned for 16GB RAM Windows 10)
     llm_enabled: bool = True
@@ -63,6 +87,7 @@ class AppSettings(BaseSettings):
 
     # Deterministic Risk Firewall limits
     risk_per_trade_pct: float = 0.75
+    max_min_lot_risk_pct: float = 1.25
     max_daily_loss_pct: float = 2.50
     max_total_drawdown_pct: float = 6.00
     max_open_positions: int = 2
