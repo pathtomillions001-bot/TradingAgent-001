@@ -170,18 +170,29 @@ class DeterministicRiskFirewall:
         else:
             passed.append(f"Total DD {account.total_drawdown_pct:.2f}% within {self.settings.max_total_drawdown_pct:.2f}% cap")
 
-        # 3. Position Count Caps
-        if len(open_positions) >= self.settings.max_open_positions:
-            rejections.append(
-                f"MAX_OPEN_POSITIONS: {len(open_positions)} open >= limit {self.settings.max_open_positions}"
-            )
-        else:
-            passed.append(f"Open positions {len(open_positions)}/{self.settings.max_open_positions}")
+        # 3. Position Count Caps (Base cap = max_open_positions for non-Gold; +1 VIP reserved 3rd slot for XAUUSD only)
+        gold_open = sum(1 for p in open_positions if p.symbol == "XAUUSD")
+        effective_max_open = (
+            self.settings.max_open_positions + (1 if self.settings.gold_reserved_extra_slot else 0)
+            if setup.symbol == "XAUUSD"
+            else self.settings.max_open_positions
+        )
 
-        if setup.symbol == "XAUUSD":
-            gold_open = sum(1 for p in open_positions if p.symbol == "XAUUSD")
-            if gold_open >= self.settings.max_gold_positions:
-                rejections.append(f"MAX_GOLD_POSITIONS: {gold_open} >= {self.settings.max_gold_positions}")
+        if len(open_positions) >= effective_max_open:
+            if setup.symbol != "XAUUSD" and self.settings.gold_reserved_extra_slot:
+                rejections.append(
+                    f"MAX_OPEN_POSITIONS: {len(open_positions)} open >= non-Gold limit {self.settings.max_open_positions} "
+                    f"(slot #{self.settings.max_open_positions + 1} is reserved exclusively for XAUUSD)"
+                )
+            else:
+                rejections.append(
+                    f"MAX_OPEN_POSITIONS: {len(open_positions)} open >= limit {effective_max_open}"
+                )
+        else:
+            passed.append(f"Open positions {len(open_positions)}/{effective_max_open}")
+
+        if setup.symbol == "XAUUSD" and gold_open >= self.settings.max_gold_positions:
+            rejections.append(f"MAX_GOLD_POSITIONS: {gold_open} >= {self.settings.max_gold_positions}")
 
         # 4. Cooldown Check
         last_ts = self._last_trade_at.get(setup.symbol)
@@ -247,25 +258,35 @@ class DeterministicRiskFirewall:
         actual_risk_pct = (actual_risk_usd / account.equity * 100.0) if account.equity > 0 else 0.0
 
         # 8. Net USD Directional Correlation Guard
-        # When Tier-1 Gold uses its standalone 0.01 min-lot allowance with zero existing USD exposure on the book,
-        # permit it up to gold_min_lot_max_risk_pct — and automatically lock out stacking additional same-direction
-        # USD pairs (EURUSD/GBPUSD/USDCAD/BTCUSD) until Gold shifts SL to Break-Even (+1.0R)!
+        # - Non-Gold assets strictly obey max_net_usd_risk_pct (so secondary FX/crypto cannot stack on top of an
+        #   un-hedged Gold position until Gold locks Break-Even at +1.0R).
+        # - Tier-1 Gold (XAUUSD) is never starved out of its reserved VIP slot by existing secondary FX trades:
+        #   at 0.01 min lot it is permitted up to gold_min_lot_max_risk_pct (+ max_net_usd_risk_pct when VIP slot active),
+        #   and at standard sizing up to max_net_usd_risk_pct + risk_per_trade_pct when VIP slot is enabled.
         current_net_usd = self.compute_open_net_usd_risk_pct(open_positions, account.equity)
         side_sign = 1 if setup.side == Side.LONG else -1
         trade_usd_contrib = prof.usd_direction_sign * side_sign * actual_risk_pct
         projected_net_usd = round(current_net_usd + trade_usd_contrib, 4)
 
-        is_gold_solo_min_lot = (
+        is_gold_min_lot = (
             setup.symbol == "XAUUSD"
             and lots > 0
             and abs(lots - quote.volume_min) < 1e-6
-            and abs(current_net_usd) < 1e-4
         )
-        effective_usd_cap = (
-            max(self.settings.max_net_usd_risk_pct, self.settings.gold_min_lot_max_risk_pct)
-            if is_gold_solo_min_lot
-            else self.settings.max_net_usd_risk_pct
-        )
+        if setup.symbol == "XAUUSD":
+            if is_gold_min_lot:
+                base_gold_cap = max(self.settings.max_net_usd_risk_pct, self.settings.gold_min_lot_max_risk_pct)
+                effective_usd_cap = (
+                    base_gold_cap + self.settings.max_net_usd_risk_pct
+                    if (self.settings.gold_reserved_extra_slot and abs(current_net_usd) > 1e-4)
+                    else base_gold_cap
+                )
+            elif self.settings.gold_reserved_extra_slot:
+                effective_usd_cap = self.settings.max_net_usd_risk_pct + self.settings.risk_per_trade_pct
+            else:
+                effective_usd_cap = self.settings.max_net_usd_risk_pct
+        else:
+            effective_usd_cap = self.settings.max_net_usd_risk_pct
 
         if prof.usd_direction_sign != 0 and abs(projected_net_usd) > effective_usd_cap:
             rejections.append(
