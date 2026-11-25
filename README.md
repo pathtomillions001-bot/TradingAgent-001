@@ -54,11 +54,11 @@ tradingagent doctor
 # 2. Run Spread-Aware Ablation Backtest on Gold (XAUUSD)
 tradingagent backtest --symbol XAUUSD --bars 2800
 
-# 3. Launch Local Web Control Center Dashboard (http://localhost:8000)
-tradingagent dashboard
+# 3. Launch Unified Web Control Center + Built-In 15s Autopilot (http://localhost:8000)
+tradingagent dashboard --autopilot --interval 15
 
-# 4. Run Autonomous Continuous Loop in Terminal
-tradingagent run --interval 15
+# 4. Install Windows 10 Desktop Hotkeys (Ctrl+Alt+T Restart, Ctrl+Alt+S Stop) + Optional Login Auto-Start
+tradingagent shortcuts --startup
 ```
 
 ---
