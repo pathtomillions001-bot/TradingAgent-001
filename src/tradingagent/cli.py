@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
 import time
 import typer
 from rich.console import Console
@@ -11,7 +16,7 @@ import uvicorn
 
 from tradingagent.backtest import SpreadAwareEventBacktester, generate_realistic_intraday_dataset
 from tradingagent.broker.paper_mt5 import DEFAULT_PRICES
-from tradingagent.config import AppSettings, load_symbol_profiles
+from tradingagent.config import AppSettings, ROOT_DIR, load_symbol_profiles
 from tradingagent.engine import TradingAgentEngine
 from tradingagent.memory import StateAndMemoryStore
 
@@ -59,8 +64,8 @@ def doctor() -> None:
         "Risk Firewall",
         "ENFORCED",
         (
-            f"Risk/Trade={settings.risk_per_trade_pct}%, DailyLock={settings.max_daily_loss_pct}%, "
-            f"NetUSDCap=±{settings.max_net_usd_risk_pct}%, Server-Side SL/TP Mandatory"
+            f"Risk/Trade={settings.risk_per_trade_pct}% (Gold 0.01<={settings.gold_min_lot_max_risk_pct}%), "
+            f"DailyLock={settings.max_daily_loss_pct}%, NetUSDCap=±{settings.max_net_usd_risk_pct}%, SL/TP Mandatory"
         ),
     )
     console.print(table)
@@ -137,9 +142,73 @@ def backtest(
 def dashboard(
     host: str = typer.Option("0.0.0.0", "--host"),
     port: int = typer.Option(8000, "--port"),
+    autopilot: bool = typer.Option(False, "--autopilot/--no-autopilot", help="Enable built-in autonomous scan loop"),
+    interval: int = typer.Option(15, "--interval", help="Seconds between autonomous Gold-First scan cycles"),
 ) -> None:
-    """Launch the local web Control Center & Live Telemetry UI."""
-    uvicorn.run("tradingagent.web:app", host=host, port=port, reload=False)
+    """Launch the local web Control Center & Live Telemetry UI (with optional built-in 15s Autopilot)."""
+    if autopilot:
+        os.environ["AUTOPILOT_ENABLED"] = "true"
+    os.environ["AUTOPILOT_INTERVAL_SECONDS"] = str(max(3, interval))
+    from tradingagent.web import create_app
+
+    web_app = create_app()
+    uvicorn.run(web_app, host=host, port=port, reload=False)
+
+
+@app.command()
+def shortcuts(
+    startup: bool = typer.Option(
+        False,
+        "--startup/--no-startup",
+        help="Also register Restart TradingAgent in the Windows Startup folder on login",
+    ),
+) -> None:
+    """Create Desktop shortcuts + Hotkeys (Ctrl+Alt+T Restart, Ctrl+Alt+S Stop) on Windows 10."""
+    start_bat = (ROOT_DIR / "scripts" / "start_tradingagent.bat").resolve()
+    stop_bat = (ROOT_DIR / "scripts" / "stop_tradingagent.bat").resolve()
+    if not start_bat.exists() or not stop_bat.exists():
+        raise typer.BadParameter(f"Launcher scripts missing under {ROOT_DIR / 'scripts'}")
+
+    if sys.platform != "win32":
+        console.print(
+            f"[yellow]Desktop .lnk hotkeys are Windows-specific.[/yellow]\n"
+            f"Launcher scripts verified at:\n  - {start_bat}\n  - {stop_bat}"
+        )
+        return
+
+    settings = AppSettings()
+    icon_src = settings.mt5_terminal_path if Path(settings.mt5_terminal_path).exists() else ""
+
+    ps_script = (
+        "$ws = New-Object -ComObject WScript.Shell; "
+        "$desk = [Environment]::GetFolderPath('Desktop'); "
+        "$s1 = $ws.CreateShortcut((Join-Path $desk 'Restart TradingAgent.lnk')); "
+        f"$s1.TargetPath = '{start_bat}'; "
+        f"$s1.WorkingDirectory = '{ROOT_DIR.resolve()}'; "
+        "$s1.HotKey = 'CTRL+ALT+T'; "
+        "$s1.Description = 'Start or Restart TradingAgent-001 (Dashboard + 15s Autopilot)'; "
+        + (f"$s1.IconLocation = '{icon_src},0'; " if icon_src else "")
+        + "$s1.Save(); "
+        "$s2 = $ws.CreateShortcut((Join-Path $desk 'Stop TradingAgent.lnk')); "
+        f"$s2.TargetPath = '{stop_bat}'; "
+        f"$s2.WorkingDirectory = '{ROOT_DIR.resolve()}'; "
+        "$s2.HotKey = 'CTRL+ALT+S'; "
+        "$s2.Description = 'Stop TradingAgent-001'; "
+        "$s2.Save(); "
+        "Write-Output $desk"
+    )
+    res = subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, text=True, check=True)
+    desk_dir = Path(res.stdout.strip().splitlines()[-1])
+
+    console.print(f"[bold green]Created Desktop Shortcuts in {desk_dir}:[/bold green]")
+    console.print("  • [bold]Restart TradingAgent.lnk[/bold]  (Hotkey: [cyan]Ctrl + Alt + T[/cyan])")
+    console.print("  • [bold]Stop TradingAgent.lnk[/bold]     (Hotkey: [cyan]Ctrl + Alt + S[/cyan])")
+
+    if startup:
+        startup_dir = Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+        if startup_dir.exists():
+            shutil.copy2(desk_dir / "Restart TradingAgent.lnk", startup_dir / "Restart TradingAgent.lnk")
+            console.print(f"  • [bold green]Auto-Start on Windows Login enabled:[/bold green] {startup_dir}")
 
 
 if __name__ == "__main__":
