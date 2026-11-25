@@ -277,7 +277,7 @@
 
       <div class="card">
         <h2>
-          <span>Spread-Aware Ablation Backtester (Zero-Fee Laptop Proof)</span>
+          <span>Real MT5 History &amp; Spread-Aware Ablation Backtester</span>
         </h2>
         <div class="bt-controls">
           <select id="btSymbol">
@@ -289,14 +289,19 @@
             <option value="USDCAD">USDCAD (Tier 3 FX)</option>
           </select>
           <select id="btBars">
-            <option value="1500">1,500 M5 Bars (~5 Days)</option>
-            <option value="2800" selected>2,800 M5 Bars (~10 Days)</option>
-            <option value="4500">4,500 M5 Bars (~16 Days)</option>
+            <option value="2800">2,800 M5 Bars (~2 Weeks)</option>
+            <option value="8500" selected>8,500 M5 Bars (~1 Month)</option>
+            <option value="25000">25,000 M5 Bars (~3 Months)</option>
+            <option value="50000">50,000 M5 Bars (~6 Months)</option>
           </select>
-          <button class="btn-gold" onclick="runBacktest()">▶ Run Ablation Backtest</button>
+          <select id="btEquity">
+            <option value="0" selected>Live Account Equity</option>
+            <option value="10000">$10,000 Standard</option>
+          </select>
+          <button class="btn-gold" onclick="runBacktest()">▶ Run Real History Backtest</button>
         </div>
         <div id="btOutput" style="font-size: 0.83rem; color: var(--muted);">
-          Click <b>Run Ablation Backtest</b> to compare <i>Raw Quant Signals</i> vs. <i>Multi-Agent Committee + Risk Firewall</i> net of live bid/ask spread and conservative intra-bar SL priority.
+          Click <b>Run Real History Backtest</b> to pull &amp; cache <b>real JustMarkets / MT5 historical M5 candles + real spreads</b> onto disk and compare <i>Raw Quant Signals</i> vs. <i>Multi-Agent Committee + Risk Firewall</i>.
         </div>
 
         <h2 style="margin-top: 20px;">Settled Reflection Memory (XAUUSD Lessons)</h2>
@@ -510,26 +515,37 @@
     async function runBacktest() {
       const symbol = document.getElementById('btSymbol').value;
       const bars = parseInt(document.getElementById('btBars').value, 10);
+      const starting_equity = parseFloat(document.getElementById('btEquity').value);
       const outEl = document.getElementById('btOutput');
-      outEl.innerHTML = `Running spread-aware event simulation on <b>${symbol}</b> (${bars} M5 bars)...`;
+      outEl.innerHTML = `Fetching real MT5 historical M5 bars &amp; running spread-aware simulation on <b>${symbol}</b> (up to ${bars.toLocaleString()} bars)...`;
 
       try {
         const res = await fetch('/api/backtest', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ symbol, bars, starting_equity: 10000 })
+          body: JSON.stringify({ symbol, bars, starting_equity, source: 'auto' })
         });
         if (!res.ok) throw new Error(`Backtest HTTP ${res.status}`);
         const data = await res.json();
         const q = data.raw_quant_baseline;
         const a = data.agent_committee_filtered;
+        const srcBadgeClass = data.is_real_history ? 'badge-green' : '';
 
         outEl.innerHTML = `
+          <div style="margin-bottom:10px; padding:8px 10px; border-radius:7px; background:var(--panel-alt); border:1px solid var(--border); font-size:0.78rem;">
+            <div>
+              <span class="badge ${srcBadgeClass}">${data.is_real_history ? '🟢 REAL BROKER HISTORY' : '🟡 SYNTHETIC FALLBACK'}</span>
+              <b style="margin-left:6px;">${data.data_source}</b>
+            </div>
+            <div style="color:var(--muted); margin-top:4px;">
+              Window: <b>${data.start_timestamp}</b> &rarr; <b>${data.end_timestamp}</b> (${data.bars_tested.toLocaleString()} M5 bars | Start Equity: $${data.starting_equity.toFixed(2)})
+            </div>
+          </div>
           <div class="bt-compare">
             <div class="op-box">
               <div style="color:var(--muted); font-weight:600;">Baseline: Raw Quant Only</div>
               <div style="font-size:1.15rem; font-weight:700; margin:4px 0; color:${q.net_return_pct >= 0 ? 'var(--green)' : 'var(--red)'}">
-                ${q.net_return_pct >= 0 ? '+' : ''}${q.net_return_pct}% ($${q.ending_equity.toFixed(0)})
+                ${q.net_return_pct >= 0 ? '+' : ''}${q.net_return_pct}% ($${q.ending_equity.toFixed(2)})
               </div>
               <div>Trades: <b>${q.total_trades}</b> | Win Rate: <b>${q.win_rate_pct}%</b></div>
               <div>Profit Factor: <b>${q.profit_factor}</b> | Sharpe: <b>${q.sharpe_ratio}</b></div>
@@ -538,7 +554,7 @@
             <div class="op-box" style="border-color: var(--gold);">
               <div style="color:var(--gold); font-weight:600;">Full Agent Committee + Risk Gate</div>
               <div style="font-size:1.15rem; font-weight:700; margin:4px 0; color:${a.net_return_pct >= 0 ? 'var(--green)' : 'var(--red)'}">
-                ${a.net_return_pct >= 0 ? '+' : ''}${a.net_return_pct}% ($${a.ending_equity.toFixed(0)})
+                ${a.net_return_pct >= 0 ? '+' : ''}${a.net_return_pct}% ($${a.ending_equity.toFixed(2)})
               </div>
               <div>Trades: <b>${a.total_trades}</b> | Win Rate: <b>${a.win_rate_pct}%</b></div>
               <div>Profit Factor: <b>${a.profit_factor}</b> | Sharpe: <b>${a.sharpe_ratio}</b></div>

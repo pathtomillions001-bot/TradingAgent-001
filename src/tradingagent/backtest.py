@@ -4,22 +4,34 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import json
+import logging
+from pathlib import Path
 import numpy as np
 import pandas as pd
 from pydantic import BaseModel
 
-from tradingagent.config import AppSettings, SymbolProfile
+from tradingagent.broker import BrokerAdapter
+from tradingagent.broker.paper_mt5 import DEFAULT_PRICES, PaperMT5Adapter
+from tradingagent.config import AppSettings, SymbolProfile, load_symbol_profiles
 from tradingagent.indicators import compute_ema, detect_fvg_and_sweeps
 from tradingagent.memory import StateAndMemoryStore
 from tradingagent.models import AgentAction, CandidateSetup, QuoteTick, Side, SetupType
 from tradingagent.risk import DeterministicRiskFirewall
 from tradingagent.agents import MultiAgentCommittee
 
+logger = logging.getLogger(__name__)
+
 
 class BacktestSummary(BaseModel):
     symbol: str
     bars_tested: int
     mode: str
+    data_source: str = "SYNTHETIC_SIMULATION"
+    is_real_history: bool = False
+    start_timestamp: str = ""
+    end_timestamp: str = ""
+    cache_path: str = ""
     starting_equity: float
     ending_equity: float
     net_return_pct: float
@@ -34,6 +46,15 @@ class BacktestSummary(BaseModel):
     spread_cost_usd: float
     equity_curve: list[dict]
     sample_trades: list[dict]
+
+
+@dataclass
+class BacktestDatasetBundle:
+    df: pd.DataFrame
+    tick_value_per_point: float
+    data_source: str
+    is_real_history: bool
+    cache_path: str = ""
 
 
 def generate_realistic_intraday_dataset(
@@ -124,6 +145,160 @@ def generate_realistic_intraday_dataset(
     })
 
 
+def load_backtest_dataset(
+    symbol: str,
+    bars: int,
+    settings: AppSettings,
+    profile: SymbolProfile,
+    broker: BrokerAdapter | None = None,
+    source: str = "auto",
+    timeframe: str = "M5",
+) -> BacktestDatasetBundle:
+    """
+    Loads real broker M5 history by default (Weakness #5 upgrade):
+      1. Live connected MT5 terminal (JustMarkets / any MT5 broker) -> normalizes 2/3-digit historical spreads
+         and live contract tick_value into canonical profile units, and caches/appends to Parquet on disk (`G:`).
+      2. Local Parquet cache (`data/catalog/{SYMBOL}_{TF}.parquet`) when offline or MT5 is closed.
+      3. Synthetic simulation fallback ONLY when `source="synthetic"` or in pure `paper` mode with no Parquet cache.
+    """
+    sym = symbol.upper()
+    src = source.lower().strip()
+    _, _, _, default_tick_val = DEFAULT_PRICES.get(sym, (100.0, 0.5, 10.0, 1.0))
+
+    catalog_dir: Path = settings.duckdb_path.parent
+    catalog_dir.mkdir(parents=True, exist_ok=True)
+    parquet_path = catalog_dir / f"{sym}_{timeframe.upper()}.parquet"
+    meta_path = catalog_dir / f"{sym}_{timeframe.upper()}.meta.json"
+
+    # Priority 1: Live MT5 Broker History (when not using PaperMT5Adapter)
+    if src in ("auto", "mt5"):
+        temp_broker: BrokerAdapter | None = None
+        active_broker: BrokerAdapter | None = None
+
+        if broker is not None and not isinstance(broker, PaperMT5Adapter) and broker.is_connected():
+            active_broker = broker
+        elif broker is None and settings.trading_mode in ("mt5_demo", "mt5_live"):
+            from tradingagent.broker.mt5_windows import MT5WindowsAdapter
+
+            all_profiles = load_symbol_profiles(settings.symbols_config_path)
+            cand_broker = MT5WindowsAdapter(settings, all_profiles)
+            if cand_broker.connect():
+                temp_broker = cand_broker
+                active_broker = cand_broker
+
+        if active_broker is not None:
+            try:
+                quote = active_broker.get_quote(sym)
+                acct = active_broker.get_account_snapshot()
+                raw_df = active_broker.get_bars(sym, timeframe=timeframe.upper(), count=bars)
+
+                if len(raw_df) >= 260:
+                    df = raw_df.copy()
+                    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+
+                    # Normalize broker historical bar spreads & tick_value to canonical profile.point units
+                    point_ratio = (quote.point / profile.point) if (quote.point > 0 and profile.point > 0) else 1.0
+                    live_canon_spread = max(1.0, round(profile.canonical_spread_points(quote.spread_price), 2))
+                    norm_spread = (df["spread"].astype(float) * point_ratio).round(2)
+                    # Replace any zero-spread historical bars with live canonical spread so costs are never understated
+                    df["spread"] = np.where(norm_spread > 0.0, norm_spread, live_canon_spread)
+
+                    canonical_tick_val = (
+                        round(quote.tick_value * (profile.point / quote.point), 6)
+                        if quote.point > 0
+                        else default_tick_val
+                    )
+
+                    # Merge with existing Parquet archive so real historical bar depth grows over time
+                    merged_df = df
+                    if parquet_path.exists():
+                        try:
+                            old_df = pd.read_parquet(parquet_path)
+                            old_df["timestamp"] = pd.to_datetime(old_df["timestamp"], utc=True)
+                            merged_df = (
+                                pd.concat([old_df, df], ignore_index=True)
+                                .drop_duplicates(subset=["timestamp"], keep="last")
+                                .sort_values("timestamp")
+                                .reset_index(drop=True)
+                            )
+                        except Exception:
+                            merged_df = df
+
+                    merged_df.to_parquet(parquet_path, index=False)
+                    meta_payload = {
+                        "symbol": sym,
+                        "broker_symbol": quote.broker_symbol,
+                        "server": acct.server,
+                        "canonical_tick_val": canonical_tick_val,
+                        "bars_archived": len(merged_df),
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    meta_path.write_text(json.dumps(meta_payload, indent=2), encoding="utf-8")
+
+                    sliced = merged_df.tail(bars).reset_index(drop=True)
+                    return BacktestDatasetBundle(
+                        df=sliced,
+                        tick_value_per_point=canonical_tick_val,
+                        data_source=f"MT5_REAL_HISTORY ({acct.server}: {quote.broker_symbol})",
+                        is_real_history=True,
+                        cache_path=str(parquet_path),
+                    )
+            except Exception as exc:
+                logger.warning("MT5 live history fetch for %s fell back to cache/synthetic: %s", sym, exc)
+                if src == "mt5":
+                    raise
+            finally:
+                if temp_broker is not None:
+                    temp_broker.disconnect()
+
+    # Priority 2: Cached Real Broker Parquet Archive on Disk (`data/catalog/{SYM}_M5.parquet`)
+    if src in ("auto", "parquet") and parquet_path.exists():
+        try:
+            cached_df = pd.read_parquet(parquet_path)
+            if len(cached_df) >= 260:
+                cached_df["timestamp"] = pd.to_datetime(cached_df["timestamp"], utc=True)
+                cached_df = cached_df.sort_values("timestamp").tail(bars).reset_index(drop=True)
+
+                cached_tick_val = default_tick_val
+                src_label = f"PARQUET_REAL_CACHE ({parquet_path.name})"
+                if meta_path.exists():
+                    try:
+                        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                        cached_tick_val = float(meta.get("canonical_tick_val", default_tick_val))
+                        srv = meta.get("server", "MT5")
+                        bsym = meta.get("broker_symbol", sym)
+                        src_label = f"PARQUET_REAL_CACHE ({srv}: {bsym})"
+                    except Exception:
+                        pass
+
+                return BacktestDatasetBundle(
+                    df=cached_df,
+                    tick_value_per_point=cached_tick_val,
+                    data_source=src_label,
+                    is_real_history=True,
+                    cache_path=str(parquet_path),
+                )
+        except Exception as exc:
+            logger.warning("Failed reading Parquet cache %s: %s", parquet_path, exc)
+            if src == "parquet":
+                raise
+
+    if src in ("mt5", "parquet"):
+        raise RuntimeError(
+            f"Requested real history source='{src}' for {sym}, but MT5 is not connected and {parquet_path} was not found."
+        )
+
+    # Priority 3: Offline Synthetic Simulation Fallback
+    syn_df = generate_realistic_intraday_dataset(symbol=sym, n_bars=bars, seed=101)
+    return BacktestDatasetBundle(
+        df=syn_df,
+        tick_value_per_point=default_tick_val,
+        data_source="SYNTHETIC_SIMULATION (Paper Offline Fallback)",
+        is_real_history=False,
+        cache_path="",
+    )
+
+
 @dataclass
 class _SimTrade:
     side: Side
@@ -167,6 +342,9 @@ class SpreadAwareEventBacktester:
         m5_df: pd.DataFrame,
         starting_equity: float = 10000.0,
         use_agent_committee: bool = True,
+        data_source: str = "SYNTHETIC_SIMULATION",
+        is_real_history: bool = False,
+        cache_path: str = "",
     ) -> BacktestSummary:
         feat = detect_fvg_and_sweeps(m5_df)
         # Compute non-lookahead H1 proxy EMA on M5 (12x M5 bars = 1 hour)
@@ -432,10 +610,18 @@ class SpreadAwareEventBacktester:
         else:
             sharpe = 0.0
 
+        start_ts_str = pd.to_datetime(feat.iloc[0]["timestamp"], utc=True).strftime("%Y-%m-%d %H:%M UTC") if n > 0 else ""
+        end_ts_str = pd.to_datetime(feat.iloc[-1]["timestamp"], utc=True).strftime("%Y-%m-%d %H:%M UTC") if n > 0 else ""
+
         return BacktestSummary(
             symbol=self.profile.canonical,
             bars_tested=n,
             mode="agent_committee_filtered" if use_agent_committee else "raw_quant_baseline",
+            data_source=data_source,
+            is_real_history=is_real_history,
+            start_timestamp=start_ts_str,
+            end_timestamp=end_ts_str,
+            cache_path=cache_path,
             starting_equity=starting_equity,
             ending_equity=equity,
             net_return_pct=round(((equity - starting_equity) / starting_equity) * 100.0, 2),

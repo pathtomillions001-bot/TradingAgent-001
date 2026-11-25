@@ -14,8 +14,7 @@ from rich.console import Console
 from rich.table import Table
 import uvicorn
 
-from tradingagent.backtest import SpreadAwareEventBacktester, generate_realistic_intraday_dataset
-from tradingagent.broker.paper_mt5 import DEFAULT_PRICES
+from tradingagent.backtest import SpreadAwareEventBacktester, load_backtest_dataset
 from tradingagent.config import AppSettings, ROOT_DIR, load_symbol_profiles
 from tradingagent.engine import TradingAgentEngine
 from tradingagent.memory import StateAndMemoryStore
@@ -105,9 +104,19 @@ def run(
 @app.command()
 def backtest(
     symbol: str = typer.Option("XAUUSD", "--symbol", help="Canonical symbol (XAUUSD, NAS100, BTCUSD, EURUSD...)"),
-    bars: int = typer.Option(2800, "--bars", help="Number of M5 bars to test"),
+    bars: int = typer.Option(8500, "--bars", help="Number of M5 bars to test (e.g. 8500 ~1 month, 25000 ~3 months)"),
+    source: str = typer.Option(
+        "auto",
+        "--source",
+        help="Data source: 'auto' (Real MT5 -> Parquet Cache -> Synthetic), 'mt5', 'parquet', or 'synthetic'",
+    ),
+    equity: float = typer.Option(
+        0.0,
+        "--equity",
+        help="Starting equity USD (0 = auto-use live MT5 equity when in mt5_demo/mt5_live, else $10,000)",
+    ),
 ) -> None:
-    """Run zero-fee spread-aware event backtest comparing Raw Quant vs. Multi-Agent Committee."""
+    """Run zero-fee spread-aware event backtest on Real MT5 History comparing Raw Quant vs. Agent Committee."""
     settings = AppSettings()
     profiles = load_symbol_profiles(settings.symbols_config_path)
     sym = symbol.upper()
@@ -115,21 +124,65 @@ def backtest(
         raise typer.BadParameter(f"Unknown symbol {sym}. Available: {', '.join(profiles)}")
 
     prof = profiles[sym]
-    _, _, _, tick_val = DEFAULT_PRICES.get(sym, (100.0, 0.5, 10.0, 1.0))
     memory = StateAndMemoryStore(settings.sqlite_path)
-    df = generate_realistic_intraday_dataset(symbol=sym, n_bars=bars, seed=101)
 
-    tester = SpreadAwareEventBacktester(settings, prof, memory, tick_value_per_point=tick_val)
-    raw_res = tester.run(df, use_agent_committee=False)
-    agent_res = tester.run(df, use_agent_committee=True)
+    # Resolve real MT5 history (or Parquet cache on G:, falling back to synthetic only when offline)
+    engine = TradingAgentEngine(settings=settings) if settings.trading_mode in ("mt5_demo", "mt5_live") else None
+    try:
+        active_broker = engine.broker if engine is not None else None
+        if equity > 0:
+            start_eq = equity
+        elif active_broker is not None and active_broker.is_connected():
+            start_eq = active_broker.get_account_snapshot().equity
+        else:
+            start_eq = 10000.0
 
-    t = Table(title=f"Ablation Backtest Results — {sym} ({bars} M5 Bars, Conservative SL-First + Live Spread)")
+        bundle = load_backtest_dataset(
+            symbol=sym,
+            bars=bars,
+            settings=settings,
+            profile=prof,
+            broker=active_broker,
+            source=source,
+        )
+    finally:
+        if engine is not None:
+            engine.broker.disconnect()
+
+    tester = SpreadAwareEventBacktester(settings, prof, memory, tick_value_per_point=bundle.tick_value_per_point)
+    raw_res = tester.run(
+        bundle.df,
+        starting_equity=start_eq,
+        use_agent_committee=False,
+        data_source=bundle.data_source,
+        is_real_history=bundle.is_real_history,
+        cache_path=bundle.cache_path,
+    )
+    agent_res = tester.run(
+        bundle.df,
+        starting_equity=start_eq,
+        use_agent_committee=True,
+        data_source=bundle.data_source,
+        is_real_history=bundle.is_real_history,
+        cache_path=bundle.cache_path,
+    )
+
+    console.print(
+        f"[bold green]Data Source:[/bold green] {agent_res.data_source} | "
+        f"[bold cyan]Window:[/bold cyan] {agent_res.start_timestamp} -> {agent_res.end_timestamp} "
+        f"({agent_res.bars_tested:,} M5 bars) | [bold]Start Equity:[/bold] ${start_eq:,.2f}"
+    )
+    if agent_res.cache_path:
+        console.print(f"[dim]Parquet Cache Updated: {agent_res.cache_path}[/dim]")
+
+    t = Table(title=f"Ablation Backtest Results — {sym} ({agent_res.bars_tested:,} M5 Bars | {agent_res.data_source})")
     t.add_column("Metric", style="cyan")
     t.add_column("Raw Quant Baseline", justify="right")
     t.add_column("Multi-Agent Committee + Risk Gate", justify="right", style="bold yellow")
 
     t.add_row("Total Trades", str(raw_res.total_trades), str(agent_res.total_trades))
     t.add_row("Win Rate", f"{raw_res.win_rate_pct:.2f}%", f"{agent_res.win_rate_pct:.2f}%")
+    t.add_row("Starting -> Ending Equity", f"${start_eq:,.2f} -> ${raw_res.ending_equity:,.2f}", f"${start_eq:,.2f} -> ${agent_res.ending_equity:,.2f}")
     t.add_row("Net Return", f"{raw_res.net_return_pct:+.2f}%", f"{agent_res.net_return_pct:+.2f}%")
     t.add_row("Profit Factor", f"{raw_res.profit_factor:.2f}", f"{agent_res.profit_factor:.2f}")
     t.add_row("Sharpe Ratio", f"{raw_res.sharpe_ratio:.2f}", f"{agent_res.sharpe_ratio:.2f}")

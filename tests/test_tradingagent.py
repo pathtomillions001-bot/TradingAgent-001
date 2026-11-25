@@ -6,8 +6,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from fastapi.testclient import TestClient
 
-from tradingagent.backtest import SpreadAwareEventBacktester, generate_realistic_intraday_dataset
-from tradingagent.broker import SymbolMapper
+from tradingagent.backtest import (
+    SpreadAwareEventBacktester,
+    generate_realistic_intraday_dataset,
+    load_backtest_dataset,
+)
+from tradingagent.broker import BrokerAdapter, SymbolMapper
 from tradingagent.config import AppSettings, load_symbol_profiles
 from tradingagent.engine import TradingAgentEngine
 from tradingagent.memory import StateAndMemoryStore
@@ -419,3 +423,90 @@ def test_windows_launcher_scripts_avoid_self_termination() -> None:
     assert "TradingAgent*" not in start_bat
     assert "-m tradingagent.cli dashboard --autopilot" in start_bat
     assert "TA001_Live_Engine*" in stop_bat
+
+
+def test_real_mt5_history_loader_and_parquet_cache(tmp_path: Path) -> None:
+    """Verifies Weakness #5 fix: real MT5 history takes priority, normalizes 3-digit spreads/tick_value, and caches Parquet."""
+    settings = AppSettings(
+        trading_mode="paper",
+        llm_enabled=False,
+        sqlite_path=tmp_path / "state.sqlite3",
+        duckdb_path=tmp_path / "catalog" / "market_data.duckdb",
+    )
+    profiles = load_symbol_profiles()
+    gold_prof = profiles["XAUUSD"]
+
+    class MockJustMarketsAdapter(BrokerAdapter):
+        def connect(self) -> bool:
+            return True
+
+        def disconnect(self) -> None:
+            pass
+
+        def is_connected(self) -> bool:
+            return True
+
+        def list_available_symbols(self) -> list[str]:
+            return ["XAUUSD.m"]
+
+        def get_account_snapshot(self) -> AccountSnapshot:
+            return AccountSnapshot(server="JustMarkets-Demo", equity=374.38, balance=374.38, free_margin=374.38)
+
+        def get_quote(self, canonical_symbol: str) -> QuoteTick:
+            return QuoteTick(
+                symbol="XAUUSD",
+                broker_symbol="XAUUSD.m",
+                timestamp=datetime.now(timezone.utc),
+                bid=2910.000,
+                ask=2910.220,
+                point=0.001,       # 3-digit broker quote
+                tick_value=0.10,   # $0.10 per 0.001 move => $1.00 per $0.01 canonical point
+                tick_size=0.001,
+            )
+
+        def get_bars(self, canonical_symbol: str, timeframe: str = "M5", count: int = 300):
+            df = generate_realistic_intraday_dataset("XAUUSD", n_bars=count, seed=42)
+            # Simulate raw 3-decimal MT5 spread column (220 broker points = $0.22 = 22.0 canonical points)
+            df["spread"] = 220
+            return df
+
+        def get_open_positions(self) -> list[OpenPosition]:
+            return []
+
+        def place_market_order(self, *args, **kwargs):
+            raise NotImplementedError
+
+        def modify_position_sl_tp(self, *args, **kwargs) -> bool:
+            return True
+
+        def close_position(self, *args, **kwargs):
+            raise NotImplementedError
+
+        def close_all_positions(self, *args, **kwargs):
+            return []
+
+    jm_broker = MockJustMarketsAdapter()
+
+    # 1. Live connected MT5 adapter -> fetches real bars, normalizes 220 -> 22.0 pts & 0.10 -> 1.0 tick_val, writes Parquet
+    live_bundle = load_backtest_dataset("XAUUSD", 700, settings, gold_prof, broker=jm_broker, source="auto")
+    assert live_bundle.is_real_history is True
+    assert "MT5_REAL_HISTORY (JustMarkets-Demo: XAUUSD.m)" == live_bundle.data_source
+    assert live_bundle.tick_value_per_point == 1.0
+    assert float(live_bundle.df["spread"].iloc[0]) == 22.0
+    assert Path(live_bundle.cache_path).exists()
+
+    # 2. When MT5 is offline (broker=None), auto-loader prioritizes the real cached Parquet archive over synthetic!
+    cached_bundle = load_backtest_dataset("XAUUSD", 600, settings, gold_prof, broker=None, source="auto")
+    assert cached_bundle.is_real_history is True
+    assert "PARQUET_REAL_CACHE (JustMarkets-Demo: XAUUSD.m)" == cached_bundle.data_source
+    assert len(cached_bundle.df) == 600
+    assert cached_bundle.tick_value_per_point == 1.0
+
+    # 3. Verify /api/backtest automatically picks up the cached real JustMarkets Parquet archive too
+    app = create_app(settings=settings)
+    with TestClient(app) as client:
+        resp = client.post("/api/backtest", json={"symbol": "XAUUSD", "bars": 600, "starting_equity": 0})
+        assert resp.status_code == 200
+        out = resp.json()
+        assert out["is_real_history"] is True
+        assert "JustMarkets-Demo: XAUUSD.m" in out["data_source"]

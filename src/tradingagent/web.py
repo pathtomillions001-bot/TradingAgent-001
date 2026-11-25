@@ -13,8 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from tradingagent.backtest import SpreadAwareEventBacktester, generate_realistic_intraday_dataset
-from tradingagent.broker.paper_mt5 import DEFAULT_PRICES, PaperMT5Adapter
+from tradingagent.backtest import SpreadAwareEventBacktester, load_backtest_dataset
+from tradingagent.broker.paper_mt5 import PaperMT5Adapter
 from tradingagent.config import AppSettings
 from tradingagent.engine import TradingAgentEngine
 
@@ -24,8 +24,9 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 class BacktestRequest(BaseModel):
     symbol: str = "XAUUSD"
-    bars: int = 1800
-    starting_equity: float = 10000.0
+    bars: int = 8500
+    starting_equity: float = 0.0  # 0.0 = use live connected MT5 account equity by default!
+    source: str = "auto"          # "auto" = Real MT5 History -> Parquet Cache -> Synthetic Fallback
 
 
 class AutopilotToggleRequest(BaseModel):
@@ -216,25 +217,56 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         if sym not in engine.profiles:
             sym = "XAUUSD"
         prof = engine.profiles[sym]
-        _, _, _, tick_val = DEFAULT_PRICES.get(sym, (100.0, 0.5, 10.0, 1.0))
-        bars_count = max(400, min(5000, req.bars))
+        bars_count = max(400, min(60000, req.bars))
 
         def _compute_ablation() -> tuple[Any, Any]:
-            df = generate_realistic_intraday_dataset(symbol=sym, n_bars=bars_count, seed=101)
+            start_eq = (
+                req.starting_equity
+                if req.starting_equity > 0
+                else engine.broker.get_account_snapshot().equity
+            )
+            bundle = load_backtest_dataset(
+                symbol=sym,
+                bars=bars_count,
+                settings=engine.settings,
+                profile=prof,
+                broker=engine.broker,
+                source=req.source,
+            )
             tester = SpreadAwareEventBacktester(
                 settings=engine.settings,
                 profile=prof,
                 memory=engine.memory,
-                tick_value_per_point=tick_val,
+                tick_value_per_point=bundle.tick_value_per_point,
             )
-            raw_q = tester.run(df, starting_equity=req.starting_equity, use_agent_committee=False)
-            agent_f = tester.run(df, starting_equity=req.starting_equity, use_agent_committee=True)
+            raw_q = tester.run(
+                bundle.df,
+                starting_equity=start_eq,
+                use_agent_committee=False,
+                data_source=bundle.data_source,
+                is_real_history=bundle.is_real_history,
+                cache_path=bundle.cache_path,
+            )
+            agent_f = tester.run(
+                bundle.df,
+                starting_equity=start_eq,
+                use_agent_committee=True,
+                data_source=bundle.data_source,
+                is_real_history=bundle.is_real_history,
+                cache_path=bundle.cache_path,
+            )
             return raw_q, agent_f
 
         raw_quant, agent_filtered = await asyncio.to_thread(_compute_ablation)
         return {
             "symbol": sym,
-            "bars_tested": bars_count,
+            "bars_tested": agent_filtered.bars_tested,
+            "data_source": agent_filtered.data_source,
+            "is_real_history": agent_filtered.is_real_history,
+            "start_timestamp": agent_filtered.start_timestamp,
+            "end_timestamp": agent_filtered.end_timestamp,
+            "cache_path": agent_filtered.cache_path,
+            "starting_equity": agent_filtered.starting_equity,
             "raw_quant_baseline": raw_quant.model_dump(mode="json"),
             "agent_committee_filtered": agent_filtered.model_dump(mode="json"),
         }
