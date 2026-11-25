@@ -158,7 +158,20 @@ class MT5WindowsAdapter(BrokerAdapter):
         }
         mt5_tf = tf_map.get(timeframe.upper(), mt5.TIMEFRAME_M5)
         broker_sym = self.mapper.to_broker(canonical_symbol)
-        rates = mt5.copy_rates_from_pos(broker_sym, mt5_tf, 0, count)
+        mt5.symbol_select(broker_sym, True)
+
+        # If requesting deep history (>5,000 bars) and terminal chart buffer is capped lower, step down gracefully
+        candidate_counts = [count]
+        for fallback_n in (25000, 15000, 10000, 5000, 2800, 1000):
+            if fallback_n < count:
+                candidate_counts.append(fallback_n)
+
+        rates = None
+        for req_n in candidate_counts:
+            rates = mt5.copy_rates_from_pos(broker_sym, mt5_tf, 0, int(req_n))
+            if rates is not None and len(rates) > 0:
+                break
+
         if rates is None or len(rates) == 0:
             raise RuntimeError(f"No bars returned for {broker_sym} ({timeframe}): {mt5.last_error()}")
 
