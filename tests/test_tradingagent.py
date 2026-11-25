@@ -510,3 +510,174 @@ def test_real_mt5_history_loader_and_parquet_cache(tmp_path: Path) -> None:
         out = resp.json()
         assert out["is_real_history"] is True
         assert "JustMarkets-Demo: XAUUSD.m" in out["data_source"]
+
+
+def test_gold_reserved_third_slot_allows_only_xauusd(tmp_path: Path) -> None:
+    """When 2 non-Gold positions are open, ONLY XAUUSD is allowed to take the 3rd VIP slot; non-Gold is blocked."""
+    settings = _make_test_settings(tmp_path)
+    profiles = load_symbol_profiles()
+    firewall = DeterministicRiskFirewall(settings, profiles)
+
+    acct = AccountSnapshot(
+        equity=374.0,
+        balance=374.0,
+        free_margin=330.0,
+        leverage=500,
+        day_starting_equity=374.0,
+        peak_equity=374.0,
+    )
+    two_non_gold_open = [
+        OpenPosition(
+            ticket=101,
+            symbol="EURUSD",
+            broker_symbol="EURUSD.m",
+            side=Side.LONG,
+            volume=0.02,
+            entry_price=1.07200,
+            current_price=1.07240,
+            sl=1.07060,
+            tp=1.07520,
+            initial_risk_usd=2.80,
+            unrealized_pnl=0.80,
+            opened_at=datetime.now(timezone.utc),
+        ),
+        OpenPosition(
+            ticket=102,
+            symbol="NAS100",
+            broker_symbol="US100.std",
+            side=Side.LONG,
+            volume=0.01,
+            entry_price=20500.0,
+            current_price=20515.0,
+            sl=20475.0,
+            tp=20560.0,
+            initial_risk_usd=2.50,
+            unrealized_pnl=1.50,
+            opened_at=datetime.now(timezone.utc),
+        ),
+    ]
+
+    # 1. A 3rd non-Gold asset (USDCAD) MUST be rejected because max_open_positions=2 for non-Gold
+    cad_quote = QuoteTick(
+        symbol="USDCAD",
+        broker_symbol="USDCAD.m",
+        timestamp=datetime.now(timezone.utc),
+        bid=1.39100,
+        ask=1.39112,
+        point=0.00001,
+        tick_value=0.72,
+        tick_size=0.00001,
+    )
+    cad_setup = CandidateSetup(
+        setup_id="TEST-CAD-3RD",
+        timestamp=datetime.now(timezone.utc),
+        symbol="USDCAD",
+        tier=3,
+        side=Side.LONG,
+        setup_type=SetupType.VWAP_EMA_PULLBACK,
+        htf_bias="BULLISH",
+        entry_price=1.39112,
+        stop_loss=1.38962,
+        take_profit=1.39452,
+        atr=0.0010,
+        adx=26.0,
+        rsi=54.0,
+        vwap_distance_atr=0.3,
+        spread_points=12.0,
+        spread_to_sl_ratio=0.08,
+        rr_ratio=2.26,
+        quant_score=84.0,
+        session_label="NY_OVERLAP_PRIME",
+    )
+    cad_res = firewall.validate_and_size(cad_setup, acct, cad_quote, two_non_gold_open)
+    assert cad_res.approved is False
+    assert any("MAX_OPEN_POSITIONS" in r for r in cad_res.rejection_reasons)
+
+    # 2. Tier-1 Gold (XAUUSD) MUST be approved as the 3rd VIP position even with 2 non-Gold positions open!
+    gold_quote = QuoteTick(
+        symbol="XAUUSD",
+        broker_symbol="XAUUSD.m",
+        timestamp=datetime.now(timezone.utc),
+        bid=2910.000,
+        ask=2910.180,
+        point=0.001,
+        tick_value=0.10,  # $1.00 per $1 move at 0.01 lot
+        tick_size=0.001,
+    )
+    gold_setup = CandidateSetup(
+        setup_id="TEST-GOLD-3RD-VIP",
+        timestamp=datetime.now(timezone.utc),
+        symbol="XAUUSD",
+        tier=1,
+        side=Side.LONG,
+        setup_type=SetupType.LIQUIDITY_SWEEP_FVG,
+        htf_bias="BULLISH",
+        entry_price=2910.180,
+        stop_loss=2903.980,   # $6.20 risk on 0.01 lot = 1.66% of $374
+        take_profit=2923.820,
+        atr=4.20,
+        adx=29.0,
+        rsi=55.0,
+        vwap_distance_atr=0.25,
+        spread_points=18.0,
+        spread_to_sl_ratio=0.029,
+        rr_ratio=2.20,
+        quant_score=91.0,
+        session_label="NY_OVERLAP_PRIME",
+    )
+    gold_res = firewall.validate_and_size(gold_setup, acct, gold_quote, two_non_gold_open)
+    assert gold_res.approved is True
+    assert gold_res.calculated_lots == 0.01
+
+    # 3. If Gold + 1 non-Gold (2 positions total) are open, non-Gold still CANNOT open as a 3rd position
+    gold_plus_one = [
+        two_non_gold_open[0],
+        OpenPosition(
+            ticket=103,
+            symbol="XAUUSD",
+            broker_symbol="XAUUSD.m",
+            side=Side.LONG,
+            volume=0.01,
+            entry_price=2910.180,
+            current_price=2912.000,
+            sl=2910.400,
+            tp=2923.820,
+            initial_risk_usd=6.20,
+            unrealized_pnl=1.82,
+            opened_at=datetime.now(timezone.utc),
+            be_moved=True,
+        ),
+    ]
+    cad_res_2 = firewall.validate_and_size(cad_setup, acct, cad_quote, gold_plus_one)
+    assert cad_res_2.approved is False
+    assert any("MAX_OPEN_POSITIONS" in r for r in cad_res_2.rejection_reasons)
+
+
+def test_mission_control_telemetry_and_candles_api(tmp_path: Path) -> None:
+    """Verifies live 6-stage telemetry, 7 specialist agent cards, 2+1 slot policy, and M5 candles endpoint."""
+    settings = _make_test_settings(tmp_path)
+    app = create_app(settings=settings)
+    with TestClient(app) as client:
+        scan_r = client.post("/api/scan?auto_execute=true")
+        assert scan_r.status_code == 200
+
+        st = client.get("/api/status").json()
+        assert st["slot_policy"]["base_max_positions"] == 2
+        assert st["slot_policy"]["gold_reserved_extra_slot"] is True
+        assert st["slot_policy"]["total_max_with_gold"] == 3
+        assert len(st["telemetry"]["stages"]) == 6
+        assert len(st["telemetry"]["agents"]) == 7
+        assert len(st["telemetry"]["events"]) >= 2
+
+        if st["open_positions"]:
+            pos0 = st["open_positions"][0]
+            assert 1 <= pos0["lifecycle_step"] <= 5
+            assert "current_r" in pos0
+            assert "progress_pct" in pos0
+
+        candles_r = client.get("/api/candles/XAUUSD?limit=60")
+        assert candles_r.status_code == 200
+        cdata = candles_r.json()
+        assert cdata["symbol"] == "XAUUSD"
+        assert len(cdata["candles"]) == 60
+        assert "vwap" in cdata["candles"][-1]

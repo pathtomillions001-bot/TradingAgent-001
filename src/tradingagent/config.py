@@ -92,6 +92,7 @@ class AppSettings(BaseSettings):
     max_daily_loss_pct: float = 2.50
     max_total_drawdown_pct: float = 6.00
     max_open_positions: int = 2
+    gold_reserved_extra_slot: bool = True
     max_gold_positions: int = 1
     max_net_usd_risk_pct: float = 1.25
     min_risk_reward_ratio: float = 1.80

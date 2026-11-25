@@ -1,287 +1,958 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="cyber-gold">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TradingAgent-001 | Local MT5 Control Center</title>
+  <title>TradingAgent-001 · Autonomous Multi-Agent Mission Control</title>
   <style>
-    :root {
-      --bg: #0b0f17;
-      --panel: #121826;
-      --panel-alt: #182032;
-      --border: #26324d;
-      --gold: #f5b841;
-      --green: #10b981;
-      --red: #ef4444;
-      --blue: #3b82f6;
-      --text: #e5e7eb;
-      --muted: #9ca3af;
+    :root, [data-theme="cyber-gold"] {
+      --bg: #05080f;
+      --bg-grad-1: rgba(245, 184, 65, 0.08);
+      --bg-grad-2: rgba(0, 210, 255, 0.06);
+      --grid-line: rgba(56, 78, 122, 0.13);
+      --panel: rgba(11, 17, 30, 0.86);
+      --panel-strong: rgba(15, 23, 40, 0.95);
+      --panel-alt: rgba(19, 29, 49, 0.78);
+      --border: rgba(63, 88, 138, 0.36);
+      --border-glow: rgba(245, 184, 65, 0.45);
+      --accent: #f5b841;
+      --accent-soft: rgba(245, 184, 65, 0.14);
+      --cyan: #00d2ff;
+      --cyan-soft: rgba(0, 210, 255, 0.14);
+      --green: #00f5a0;
+      --green-soft: rgba(0, 245, 160, 0.14);
+      --red: #ff3b5c;
+      --red-soft: rgba(255, 59, 92, 0.16);
+      --amber: #ffb020;
+      --text: #eef2ff;
+      --muted: #8b9bb8;
+      --mono: "JetBrains Mono", "Cascadia Code", Consolas, "SFMono-Regular", monospace;
     }
+
+    [data-theme="quantum-cyan"] {
+      --bg: #040914;
+      --bg-grad-1: rgba(0, 229, 255, 0.10);
+      --bg-grad-2: rgba(124, 58, 237, 0.09);
+      --grid-line: rgba(0, 210, 255, 0.11);
+      --panel: rgba(8, 18, 36, 0.86);
+      --panel-strong: rgba(11, 24, 48, 0.96);
+      --panel-alt: rgba(14, 32, 62, 0.78);
+      --border: rgba(0, 210, 255, 0.30);
+      --border-glow: rgba(0, 229, 255, 0.55);
+      --accent: #00e5ff;
+      --accent-soft: rgba(0, 229, 255, 0.14);
+      --cyan: #a78bfa;
+      --cyan-soft: rgba(167, 139, 250, 0.15);
+      --green: #10f5b0;
+      --red: #ff4769;
+    }
+
+    [data-theme="bloomberg"] {
+      --bg: #040404;
+      --bg-grad-1: rgba(255, 159, 28, 0.07);
+      --bg-grad-2: rgba(0, 255, 136, 0.04);
+      --grid-line: rgba(255, 159, 28, 0.09);
+      --panel: rgba(12, 12, 14, 0.94);
+      --panel-strong: rgba(18, 18, 20, 0.98);
+      --panel-alt: rgba(24, 24, 28, 0.90);
+      --border: rgba(255, 159, 28, 0.28);
+      --border-glow: rgba(255, 159, 28, 0.55);
+      --accent: #ff9f1c;
+      --accent-soft: rgba(255, 159, 28, 0.15);
+      --cyan: #38bdf8;
+      --green: #00ff88;
+      --red: #ff3838;
+      --text: #f5f5f4;
+      --muted: #a3a3a3;
+    }
+
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
-      background: var(--bg);
+    html, body {
+      min-height: 100%;
+      background-color: var(--bg);
       color: var(--text);
-      line-height: 1.5;
-      padding: 20px;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.45;
+      overflow-x: hidden;
     }
-    .container { max-width: 1380px; margin: 0 auto; }
-    header {
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+      background:
+        radial-gradient(circle at 12% 8%, var(--bg-grad-1), transparent 42%),
+        radial-gradient(circle at 88% 14%, var(--bg-grad-2), transparent 46%),
+        linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+      background-size: 100% 100%, 100% 100%, 38px 38px, 38px 38px;
+    }
+
+    .app-shell {
+      position: relative;
+      z-index: 1;
+      max-width: 1540px;
+      margin: 0 auto;
+      padding: 16px 20px 32px;
+    }
+
+    /* Top Command Header */
+    .topbar {
       display: flex;
       flex-wrap: wrap;
       justify-content: space-between;
       align-items: center;
       gap: 14px;
-      background: var(--panel);
+      padding: 14px 20px;
+      background: var(--panel-strong);
       border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 16px 22px;
-      margin-bottom: 18px;
+      border-radius: 14px;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 10px 34px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      margin-bottom: 14px;
     }
-    .brand h1 { font-size: 1.25rem; display: flex; align-items: center; gap: 10px; }
-    .badge {
-      font-size: 0.75rem;
-      font-weight: 600;
+
+    .brand-cluster {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .orbital-beacon {
+      width: 40px;
+      height: 40px;
+      border-radius: 11px;
+      background: linear-gradient(135deg, var(--accent-soft), rgba(0, 210, 255, 0.12));
+      border: 1px solid var(--border-glow);
+      display: grid;
+      place-items: center;
+      position: relative;
+      box-shadow: 0 0 18px var(--accent-soft);
+    }
+
+    .beacon-dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 12px var(--green);
+      animation: pulseGlow 1.9s infinite ease-in-out;
+    }
+
+    .beacon-dot.halted {
+      background: var(--red);
+      box-shadow: 0 0 14px var(--red);
+    }
+
+    @keyframes pulseGlow {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.28); opacity: 0.65; }
+    }
+
+    .brand-title {
+      font-size: 1.12rem;
+      font-weight: 800;
+      letter-spacing: 0.03em;
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .brand-meta {
+      font-size: 0.76rem;
+      color: var(--muted);
+      font-family: var(--mono);
+      margin-top: 3px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 0.71rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
       padding: 3px 9px;
       border-radius: 999px;
-      background: rgba(245, 184, 65, 0.16);
-      color: var(--gold);
-      border: 1px solid rgba(245, 184, 65, 0.35);
+      background: var(--accent-soft);
+      color: var(--accent);
+      border: 1px solid var(--border-glow);
     }
-    .badge-green {
-      background: rgba(16, 185, 129, 0.16);
-      color: var(--green);
-      border-color: rgba(16, 185, 129, 0.35);
-    }
-    .badge-red {
-      background: rgba(239, 68, 68, 0.18);
-      color: var(--red);
-      border-color: rgba(239, 68, 68, 0.4);
-    }
-    .controls { display: flex; flex-wrap: wrap; gap: 10px; }
-    button {
-      cursor: pointer;
-      border: 1px solid var(--border);
-      background: var(--panel-alt);
-      color: var(--text);
-      padding: 9px 15px;
-      border-radius: 8px;
-      font-size: 0.86rem;
-      font-weight: 600;
-      transition: all 0.15s ease;
-    }
-    button:hover { filter: brightness(1.15); }
-    button.btn-gold {
-      background: var(--gold);
-      color: #111827;
-      border-color: var(--gold);
-    }
-    button.btn-danger {
-      background: rgba(239, 68, 68, 0.18);
-      color: #fca5a5;
-      border-color: var(--red);
-    }
-    .kpi-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(205px, 1fr));
-      gap: 14px;
-      margin-bottom: 18px;
-    }
-    .card {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 16px 18px;
-    }
-    .kpi-label { font-size: 0.78rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
-    .kpi-val { font-size: 1.45rem; font-weight: 700; margin-top: 4px; }
-    .kpi-sub { font-size: 0.78rem; color: var(--muted); margin-top: 4px; }
-    .layout-2col {
-      display: grid;
-      grid-template-columns: 1.15fr 1fr;
-      gap: 18px;
-      margin-bottom: 18px;
-    }
-    @media (max-width: 1024px) {
-      .layout-2col { grid-template-columns: 1fr; }
-    }
-    h2 {
-      font-size: 0.98rem;
-      margin-bottom: 12px;
+
+    .pill-green { background: var(--green-soft); color: var(--green); border-color: rgba(0, 245, 160, 0.4); }
+    .pill-red { background: var(--red-soft); color: var(--red); border-color: rgba(255, 59, 92, 0.45); }
+    .pill-cyan { background: var(--cyan-soft); color: var(--cyan); border-color: rgba(0, 210, 255, 0.38); }
+
+    .top-actions {
       display: flex;
-      justify-content: space-between;
       align-items: center;
-      color: #f3f4f6;
+      flex-wrap: wrap;
+      gap: 9px;
     }
-    table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
-    th, td {
-      text-align: left;
-      padding: 9px 8px;
-      border-bottom: 1px solid rgba(38, 50, 77, 0.65);
+
+    .countdown-chip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 11px;
+      border-radius: 10px;
+      background: var(--panel-alt);
+      border: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 0.76rem;
     }
-    th { color: var(--muted); font-weight: 600; font-size: 0.76rem; text-transform: uppercase; }
-    .pos-long { color: var(--green); font-weight: 700; }
-    .pos-short { color: var(--red); font-weight: 700; }
-    .audit-item {
+
+    button, select {
+      font-family: inherit;
+      font-size: 0.81rem;
+      font-weight: 600;
+      color: var(--text);
       background: var(--panel-alt);
       border: 1px solid var(--border);
       border-radius: 9px;
-      padding: 12px 14px;
-      margin-bottom: 10px;
-      font-size: 0.84rem;
+      padding: 8px 13px;
+      cursor: pointer;
+      transition: all 0.16s ease;
     }
-    .audit-head {
+
+    button:hover, select:hover {
+      border-color: var(--accent);
+      transform: translateY(-1px);
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), #e09619);
+      color: #070b14;
+      border-color: transparent;
+      font-weight: 800;
+      box-shadow: 0 0 18px var(--accent-soft);
+    }
+
+    .btn-autopilot-on {
+      background: var(--green-soft);
+      color: var(--green);
+      border-color: rgba(0, 245, 160, 0.45);
+      box-shadow: 0 0 15px rgba(0, 245, 160, 0.14);
+    }
+
+    .btn-kill {
+      background: var(--red-soft);
+      color: #ff8fa3;
+      border-color: rgba(255, 59, 92, 0.5);
+    }
+
+    /* Live Mission Banner */
+    .mission-strip {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 16px;
+      margin-bottom: 14px;
+      border-radius: 11px;
+      background: linear-gradient(90deg, var(--accent-soft), rgba(11, 17, 30, 0.85) 55%, var(--cyan-soft));
+      border: 1px solid var(--border);
+      font-size: 0.82rem;
+    }
+
+    .mission-headline {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-family: var(--mono);
+      font-weight: 600;
+    }
+
+    .scan-spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid var(--accent);
+      border-top-color: transparent;
+      border-radius: 50%;
+      display: inline-block;
+      animation: spin 0.75s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px 18px;
+      backdrop-filter: blur(14px);
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+      margin-bottom: 16px;
+    }
+
+    .panel-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 6px;
-      font-weight: 600;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 13px;
     }
-    .opinions-grid {
+
+    .panel-title {
+      font-size: 0.88rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: #f8fafc;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .panel-sub {
+      font-size: 0.75rem;
+      color: var(--muted);
+      font-family: var(--mono);
+    }
+
+    /* 6-Stage Neural Orchestration Pipeline */
+    .pipeline-track {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      grid-template-columns: repeat(6, minmax(155px, 1fr));
+      gap: 10px;
+      position: relative;
+      overflow-x: auto;
+      padding-bottom: 4px;
+    }
+
+    .stage-node {
+      position: relative;
+      background: var(--panel-alt);
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      padding: 11px 12px;
+      transition: all 0.22s ease;
+      overflow: hidden;
+    }
+
+    .stage-node::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 3px;
+      background: rgba(139, 155, 184, 0.25);
+    }
+
+    .stage-node.working {
+      border-color: var(--cyan);
+      box-shadow: 0 0 22px var(--cyan-soft);
+      transform: translateY(-2px);
+    }
+    .stage-node.working::after {
+      background: linear-gradient(90deg, transparent, var(--cyan), var(--accent), transparent);
+      background-size: 200% 100%;
+      animation: flowBeam 1.2s linear infinite;
+    }
+
+    .stage-node.done {
+      border-color: rgba(0, 245, 160, 0.45);
+    }
+    .stage-node.done::after { background: var(--green); }
+
+    .stage-node.veto {
+      border-color: rgba(255, 176, 32, 0.55);
+    }
+    .stage-node.veto::after { background: var(--amber); }
+
+    @keyframes flowBeam {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    .stage-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-family: var(--mono);
+      font-size: 0.69rem;
+      color: var(--muted);
+      margin-bottom: 5px;
+    }
+
+    .stage-name {
+      font-size: 0.83rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .stage-role {
+      font-size: 0.71rem;
+      color: var(--muted);
+      margin-top: 1px;
+    }
+
+    .stage-detail {
+      margin-top: 7px;
+      font-family: var(--mono);
+      font-size: 0.71rem;
+      color: var(--accent);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Specialist Agent Swarm Grid */
+    .agent-swarm-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .agent-card {
+      background: rgba(8, 13, 24, 0.78);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 6px;
+      transition: border-color 0.2s ease;
+    }
+
+    .agent-card.state-WORKING { border-color: var(--cyan); box-shadow: 0 0 16px var(--cyan-soft); }
+    .agent-card.state-APPROVED { border-color: rgba(0, 245, 160, 0.42); }
+    .agent-card.state-VETO, .agent-card.state-BLOCKED { border-color: rgba(255, 59, 92, 0.48); }
+
+    .agent-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 6px;
+    }
+
+    .agent-name { font-size: 0.8rem; font-weight: 700; }
+    .agent-role { font-size: 0.68rem; color: var(--muted); font-family: var(--mono); }
+    .agent-task {
+      font-size: 0.74rem;
+      color: #cbd5e1;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      min-height: 2.15em;
+    }
+
+    .conf-bar-bg {
+      height: 4px;
+      border-radius: 99px;
+      background: rgba(148, 163, 184, 0.16);
+      overflow: hidden;
+    }
+    .conf-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--cyan), var(--green));
+      transition: width 0.35s ease;
+    }
+
+    /* Slot Matrix + Active Trade Stepper */
+    .slot-matrix {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    @media (max-width: 820px) { .slot-matrix { grid-template-columns: 1fr; } }
+
+    .slot-box {
+      padding: 9px 12px;
+      border-radius: 10px;
+      background: var(--panel-alt);
+      border: 1px dashed var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.78rem;
+    }
+    .slot-box.occupied {
+      border-style: solid;
+      border-color: rgba(0, 245, 160, 0.45);
+      background: rgba(0, 245, 160, 0.06);
+    }
+    .slot-box.vip-gold {
+      border-color: var(--border-glow);
+      background: linear-gradient(90deg, rgba(245, 184, 65, 0.10), rgba(15, 23, 40, 0.75));
+    }
+
+    .trade-lifecycle-card {
+      background: var(--panel-alt);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 13px 15px;
+      margin-bottom: 10px;
+    }
+
+    .trade-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .stepper-row {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 6px;
+      margin-bottom: 11px;
+    }
+
+    .step-chip {
+      font-size: 0.69rem;
+      font-family: var(--mono);
+      text-align: center;
+      padding: 5px 6px;
+      border-radius: 7px;
+      background: rgba(8, 12, 22, 0.7);
+      border: 1px solid rgba(139, 155, 184, 0.2);
+      color: var(--muted);
+    }
+    .step-chip.reached {
+      color: var(--green);
+      border-color: rgba(0, 245, 160, 0.42);
+      background: rgba(0, 245, 160, 0.09);
+    }
+    .step-chip.current {
+      color: #070b14;
+      font-weight: 800;
+      background: linear-gradient(90deg, var(--accent), var(--green));
+      border-color: transparent;
+      box-shadow: 0 0 14px var(--accent-soft);
+    }
+
+    .r-laser-track {
+      position: relative;
+      height: 12px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgba(255,59,92,0.35) 0%, rgba(148,163,184,0.18) 32%, rgba(0,245,160,0.32) 100%);
+      border: 1px solid var(--border);
+      margin: 14px 0 6px;
+    }
+
+    .r-marker {
+      position: absolute;
+      top: -4px;
+      bottom: -4px;
+      width: 2px;
+      background: rgba(255, 255, 255, 0.45);
+    }
+
+    .r-puck {
+      position: absolute;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--accent);
+      border: 2px solid #fff;
+      box-shadow: 0 0 14px var(--accent);
+      transition: left 0.35s ease;
+    }
+
+    .r-labels {
+      display: flex;
+      justify-content: space-between;
+      font-family: var(--mono);
+      font-size: 0.71rem;
+      color: var(--muted);
+    }
+
+    /* Main Workspace Grid */
+    .workspace-grid {
+      display: grid;
+      grid-template-columns: 1.22fr 1fr;
+      gap: 16px;
+    }
+    @media (max-width: 1120px) { .workspace-grid { grid-template-columns: 1fr; } }
+
+    .chart-box {
+      position: relative;
+      width: 100%;
+      height: 295px;
+      background: rgba(5, 9, 18, 0.82);
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      overflow: hidden;
+      margin-bottom: 13px;
+    }
+    .chart-box canvas { width: 100%; height: 100%; display: block; }
+
+    .chart-legend {
+      position: absolute;
+      top: 8px;
+      left: 11px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      font-family: var(--mono);
+      font-size: 0.71rem;
+      pointer-events: none;
+      background: rgba(5, 9, 18, 0.72);
+      padding: 4px 8px;
+      border-radius: 6px;
+      border: 1px solid rgba(63, 88, 138, 0.25);
+    }
+
+    table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    th, td {
+      padding: 8px 7px;
+      text-align: left;
+      border-bottom: 1px solid rgba(63, 88, 138, 0.22);
+    }
+    th {
+      font-size: 0.69rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+    }
+    tbody tr.wl-row { cursor: pointer; transition: background 0.14s ease; }
+    tbody tr.wl-row:hover { background: rgba(245, 184, 65, 0.07); }
+    tbody tr.wl-row.active-sym {
+      background: var(--accent-soft);
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+
+    /* Live Agent Stream & Debate Tabs */
+    .tab-bar {
+      display: inline-flex;
+      background: rgba(6, 10, 20, 0.8);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      padding: 3px;
+      gap: 4px;
+    }
+    .tab-btn {
+      border: none;
+      background: transparent;
+      padding: 5px 11px;
+      border-radius: 6px;
+      font-size: 0.74rem;
+      color: var(--muted);
+    }
+    .tab-btn.active {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border: 1px solid var(--border-glow);
+    }
+
+    .terminal-stream {
+      height: 465px;
+      overflow-y: auto;
+      background: rgba(4, 8, 15, 0.9);
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      padding: 10px 12px;
+      font-family: var(--mono);
+      font-size: 0.74rem;
+    }
+
+    .log-line {
+      padding: 6px 8px;
+      border-bottom: 1px solid rgba(63, 88, 138, 0.16);
+      display: grid;
+      grid-template-columns: 78px 92px 62px 1fr;
+      gap: 8px;
+      align-items: baseline;
+    }
+    @media (max-width: 680px) {
+      .log-line { grid-template-columns: 70px 80px 1fr; }
+      .log-sym { display: none; }
+    }
+    .lvl-gold { color: var(--accent); }
+    .lvl-bull { color: var(--green); }
+    .lvl-exec { color: #070b14; background: var(--green); padding: 1px 5px; border-radius: 4px; font-weight: 800; }
+    .lvl-warn { color: var(--amber); }
+    .lvl-bear { color: var(--red); }
+    .lvl-info { color: var(--cyan); }
+
+    .debate-card {
+      background: var(--panel-alt);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 11px 13px;
+      margin-bottom: 10px;
+      font-size: 0.79rem;
+    }
+
+    .debate-ops {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
       gap: 8px;
       margin-top: 8px;
     }
-    .op-box {
-      background: rgba(11, 15, 23, 0.65);
+    @media (max-width: 720px) { .debate-ops { grid-template-columns: 1fr; } }
+
+    .op-mini {
+      background: rgba(5, 9, 18, 0.72);
       border: 1px solid var(--border);
-      border-radius: 7px;
-      padding: 8px;
-      font-size: 0.77rem;
-    }
-    .bt-controls {
-      display: flex;
-      gap: 10px;
-      align-items: center;
-      flex-wrap: wrap;
-      margin-bottom: 12px;
-    }
-    select {
-      background: var(--panel-alt);
-      color: var(--text);
-      border: 1px solid var(--border);
-      padding: 8px 12px;
       border-radius: 8px;
-      font-size: 0.85rem;
+      padding: 7px 9px;
+      font-size: 0.72rem;
     }
-    .bt-compare {
+
+    /* Radial Gauges & Risk Panel */
+    .gauges-row {
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 10px;
     }
-    .lesson-pill {
-      font-size: 0.8rem;
-      padding: 8px 11px;
-      border-left: 3px solid var(--gold);
+    @media (max-width: 680px) { .gauges-row { grid-template-columns: 1fr; } }
+
+    .gauge-card {
       background: var(--panel-alt);
-      border-radius: 0 7px 7px 0;
-      margin-bottom: 8px;
-      color: #d1d5db;
+      border: 1px solid var(--border);
+      border-radius: 11px;
+      padding: 10px;
+      text-align: center;
     }
-    .toast {
-      margin-bottom: 14px;
-      padding: 10px 14px;
-      border-radius: 8px;
-      background: rgba(59, 130, 246, 0.16);
-      border: 1px solid rgba(59, 130, 246, 0.4);
-      font-size: 0.85rem;
+
+    .kpi-strip {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .kpi-mini {
+      background: var(--panel-alt);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+    }
+    .kpi-mini .lbl { font-size: 0.69rem; color: var(--muted); text-transform: uppercase; }
+    .kpi-mini .val { font-size: 1.24rem; font-weight: 800; margin-top: 2px; font-family: var(--mono); }
+
+    .bt-curve-box {
+      width: 100%;
+      height: 155px;
+      background: rgba(4, 8, 15, 0.82);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      margin: 10px 0;
+      overflow: hidden;
+    }
+    .bt-curve-box canvas { width: 100%; height: 100%; display: block; }
+
+    .lesson-item {
+      font-size: 0.76rem;
+      padding: 7px 10px;
+      border-left: 3px solid var(--accent);
+      background: var(--panel-alt);
+      border-radius: 0 8px 8px 0;
+      margin-bottom: 7px;
+      color: #dbeafe;
+    }
+
+    .toast-banner {
+      position: fixed;
+      bottom: 20px;
+      right: 22px;
+      z-index: 99;
+      padding: 11px 16px;
+      border-radius: 10px;
+      background: var(--panel-strong);
+      border: 1px solid var(--accent);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.65);
+      font-family: var(--mono);
+      font-size: 0.8rem;
       display: none;
     }
   </style>
 </head>
 <body>
-  <div class="container">
-    <header>
-      <div class="brand">
-        <h1>
-          TradingAgent-001
-          <span class="badge">Gold-First (XAUUSD)</span>
-          <span id="modeBadge" class="badge badge-green">LOADING...</span>
-        </h1>
-        <div style="font-size: 0.8rem; color: var(--muted); margin-top: 4px;" id="brainStatus">
-          Connecting to local Windows/MT5 engine...
+  <div class="app-shell">
+    <!-- TOP COMMAND BAR -->
+    <header class="topbar">
+      <div class="brand-cluster">
+        <div class="orbital-beacon">
+          <div id="beaconDot" class="beacon-dot"></div>
+        </div>
+        <div>
+          <div class="brand-title">
+            TRADINGAGENT-001
+            <span class="pill">👑 GOLD-FIRST VIP (2+1 SLOT)</span>
+            <span id="modeBadge" class="pill pill-green">CONNECTING</span>
+            <span id="sessionBadge" class="pill pill-cyan">UTC</span>
+          </div>
+          <div class="brand-meta" id="brainMeta">
+            Initializing local MT5 + Multi-Agent Neural Engine...
+          </div>
         </div>
       </div>
-      <div class="controls">
+
+      <div class="top-actions">
+        <div class="countdown-chip" title="Next 15s Autonomous Gold-First Scan">
+          <span style="color:var(--muted);">NEXT SCAN</span>
+          <b id="nextScanCountdown" style="color:var(--accent);">--s</b>
+        </div>
         <button id="autopilotBtn" onclick="toggleAutopilot()">🤖 Autopilot: OFF</button>
-        <button class="btn-gold" onclick="runScanCycle(true)">⚡ Scan &amp; Execute Cycle</button>
-        <button onclick="runScanCycle(false)">🔍 Dry-Run Scan Only</button>
-        <button class="btn-danger" id="killBtn" onclick="toggleKillSwitch()">🛑 Emergency Kill Switch</button>
+        <button class="btn-primary" onclick="runScanCycle(true)">⚡ Scan &amp; Execute</button>
+        <button onclick="runScanCycle(false)">🔍 Dry Scan</button>
+        <button class="btn-kill" id="killBtn" onclick="toggleKillSwitch()">🛑 Kill Switch</button>
+        <select id="themeSelect" onchange="setTheme(this.value)" title="HUD Visual Theme">
+          <option value="cyber-gold">✨ Cyber Gold HUD</option>
+          <option value="quantum-cyan">💠 Quantum Cyan</option>
+          <option value="bloomberg">🟧 Bloomberg Pro</option>
+        </select>
       </div>
     </header>
 
-    <div id="toast" class="toast"></div>
+    <!-- LIVE TELEMETRY HEADLINE -->
+    <div class="mission-strip">
+      <div class="mission-headline">
+        <span id="liveSpinner" class="scan-spinner" style="display:none;"></span>
+        <span style="color:var(--accent);">LIVE ORCHESTRATOR &raquo;</span>
+        <span id="pipelineHeadline">Waiting for telemetry snapshot...</span>
+      </div>
+      <div style="font-family:var(--mono); font-size:0.75rem; color:var(--muted);" id="cycleStats">
+        Cycles: 0 | Last Latency: 0ms
+      </div>
+    </div>
 
-    <section class="kpi-grid">
-      <div class="card">
-        <div class="kpi-label">Account Equity / Balance</div>
-        <div class="kpi-val" id="kpiEquity">$10,000.00</div>
-        <div class="kpi-sub" id="kpiBalance">Balance: $10,000.00 | Free Margin: $10,000.00</div>
+    <!-- HERO 1: 6-STAGE NEURAL PIPELINE + SPECIALIST AGENT SWARM -->
+    <section class="panel">
+      <div class="panel-header">
+        <div class="panel-title">
+          <span>🧠 Live Multi-Agent Neural Pipeline &amp; Specialist Swarm</span>
+        </div>
+        <div class="panel-sub">Every agent reports live state, confidence, stance &amp; millisecond latency</div>
       </div>
-      <div class="card">
-        <div class="kpi-label">Daily Drawdown Guard</div>
-        <div class="kpi-val" id="kpiDailyDD">0.00%</div>
-        <div class="kpi-sub" id="kpiDailyCap">Hard Daily Lock: 2.50% | Risk/Trade: 0.75%</div>
-      </div>
-      <div class="card">
-        <div class="kpi-label">Net USD Correlation Exposure</div>
-        <div class="kpi-val" id="kpiUsdRisk">0.00%</div>
-        <div class="kpi-sub" id="kpiUsdCap">Max Correlated USD Risk Cap: ±1.25%</div>
-      </div>
-      <div class="card">
-        <div class="kpi-label">Open MT5 Positions</div>
-        <div class="kpi-val" id="kpiOpenCount">0</div>
-        <div class="kpi-sub">Server-Side Hard SL &amp; TP Enforced</div>
-      </div>
+
+      <div class="pipeline-track" id="pipelineTrack"></div>
+      <div class="agent-swarm-grid" id="agentSwarmGrid"></div>
     </section>
 
-    <div class="layout-2col">
-      <div class="card">
-        <h2>
-          <span>Priority Watchlist (Tier 1 Gold → Tier 2/3 Fallbacks)</span>
-          <span style="font-size:0.75rem; color:var(--muted);">Auto-refresh 4s</span>
-        </h2>
+    <!-- HERO 2: 2+1 GOLD VIP SLOT MATRIX & ACTIVE TRADE LIFECYCLE TRACKER -->
+    <section class="panel">
+      <div class="panel-header">
+        <div class="panel-title">
+          <span>🎯 Active Trade Lifecycle &amp; 2+1 Gold VIP Slot Allocation</span>
+        </div>
+        <div class="panel-sub" id="slotSummaryText">
+          Slots 1–2: Any Approved Pair · Slot 3: Reserved Strictly for Tier-1 XAUUSD Only
+        </div>
+      </div>
+
+      <div class="slot-matrix" id="slotMatrix"></div>
+      <div id="activeTradesDeck"></div>
+    </section>
+
+    <!-- MAIN TACTICAL WORKSPACE: LIVE M5 CHART + WATCHLIST | LIVE AGENT STREAM + DEBATE -->
+    <div class="workspace-grid">
+      <section class="panel">
+        <div class="panel-header">
+          <div class="panel-title">
+            <span>📈 Tactical M5 Structure &amp; SL/BE/TP Radar — <span id="chartSymTitle" style="color:var(--accent);">XAUUSD</span></span>
+          </div>
+          <div class="panel-sub" id="chartIndicatorsSub">Click any watchlist row below to switch live M5 feed</div>
+        </div>
+
+        <div class="chart-box">
+          <div class="chart-legend">
+            <span style="color:#38bdf8;">━ EMA 20</span>
+            <span style="color:#a78bfa;">━ EMA 50</span>
+            <span style="color:#f5b841;">┈ Session VWAP</span>
+            <span style="color:#00f5a0;">▲/▼ Sweep · FVG</span>
+          </div>
+          <canvas id="candleCanvas"></canvas>
+        </div>
+
+        <div class="panel-header" style="margin-top:6px; margin-bottom:8px;">
+          <div class="panel-title" style="font-size:0.8rem;">⚡ Priority Watchlist (Click Symbol to Inspect)</div>
+          <div class="panel-sub">Normalized Canonical Spread Gate</div>
+        </div>
         <table>
           <thead>
             <tr>
               <th>Tier</th>
-              <th>Symbol</th>
+              <th>Instrument</th>
               <th>Bid</th>
               <th>Ask</th>
               <th>Contract Unit</th>
-              <th>Live Spread</th>
-              <th>Gate</th>
+              <th>Spread</th>
+              <th>Status</th>
             </tr>
           </thead>
           <tbody id="watchlistBody"></tbody>
         </table>
+      </section>
 
-        <h2 style="margin-top: 20px;">Active Positions (Server-Side SL/TP)</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Ticket</th>
-              <th>Symbol</th>
-              <th>Side</th>
-              <th>Lots</th>
-              <th>Entry</th>
-              <th>SL / TP</th>
-              <th>PnL</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody id="positionsBody"></tbody>
-        </table>
-      </div>
+      <section class="panel">
+        <div class="panel-header">
+          <div class="panel-title">💬 Agent Thought Stream &amp; Debate Verdicts</div>
+          <div class="tab-bar">
+            <button class="tab-btn active" id="tabStreamBtn" onclick="switchRightTab('stream')">Live Stream</button>
+            <button class="tab-btn" id="tabDebateBtn" onclick="switchRightTab('debate')">Committee Verdicts</button>
+          </div>
+        </div>
 
-      <div class="card">
-        <h2>
-          <span>Real MT5 History &amp; Spread-Aware Ablation Backtester</span>
-        </h2>
-        <div class="bt-controls">
+        <div id="streamPane" class="terminal-stream"></div>
+        <div id="debatePane" class="terminal-stream" style="display:none;"></div>
+      </section>
+    </div>
+
+    <!-- BOTTOM ANALYTICS: RADIAL RISK FIREWALL | REAL MT5 HISTORY BACKTESTER -->
+    <div class="workspace-grid">
+      <section class="panel">
+        <div class="panel-header">
+          <div class="panel-title">🛡️ Deterministic Risk Firewall Telemetry</div>
+          <div class="panel-sub">100% Zero-Trust Python Enforcement</div>
+        </div>
+
+        <div class="kpi-strip">
+          <div class="kpi-mini">
+            <div class="lbl">Live Equity</div>
+            <div class="val" id="kpiEquity">$0.00</div>
+          </div>
+          <div class="kpi-mini">
+            <div class="lbl">Balance</div>
+            <div class="val" id="kpiBalance">$0.00</div>
+          </div>
+          <div class="kpi-mini">
+            <div class="lbl">Free Margin</div>
+            <div class="val" id="kpiFreeMargin">$0.00</div>
+          </div>
+        </div>
+
+        <div class="gauges-row" id="riskGaugesRow"></div>
+
+        <div class="panel-header" style="margin-top:16px; margin-bottom:8px;">
+          <div class="panel-title" style="font-size:0.8rem;">🧬 Settled Reflection Memory (XAUUSD Lessons)</div>
+        </div>
+        <div id="lessonsBox"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div class="panel-title">🧪 Real MT5 History &amp; Equity Curve Backtester</div>
+          <div class="panel-sub">Parquet Cached on Disk · Spread-Aware</div>
+        </div>
+
+        <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
           <select id="btSymbol">
-            <option value="XAUUSD">XAUUSD (Tier 1 Primary Gold)</option>
+            <option value="XAUUSD">XAUUSD (Tier 1 Gold)</option>
             <option value="NAS100">NAS100 (Tier 2 US100)</option>
             <option value="BTCUSD">BTCUSD (Tier 2 Crypto)</option>
             <option value="EURUSD">EURUSD (Tier 3 FX)</option>
@@ -289,178 +960,383 @@
             <option value="USDCAD">USDCAD (Tier 3 FX)</option>
           </select>
           <select id="btBars">
-            <option value="2800">2,800 M5 Bars (~2 Weeks)</option>
-            <option value="8500" selected>8,500 M5 Bars (~1 Month)</option>
-            <option value="25000">25,000 M5 Bars (~3 Months)</option>
-            <option value="50000">50,000 M5 Bars (~6 Months)</option>
+            <option value="2800">2,800 M5 (~2 Wks)</option>
+            <option value="8500" selected>8,500 M5 (~1 Mo)</option>
+            <option value="25000">25,000 M5 (~3 Mos)</option>
+            <option value="50000">50,000 M5 (~6 Mos)</option>
           </select>
           <select id="btEquity">
-            <option value="0" selected>Live Account Equity</option>
+            <option value="0" selected>Live MT5 Equity</option>
             <option value="10000">$10,000 Standard</option>
           </select>
-          <button class="btn-gold" onclick="runBacktest()">▶ Run Real History Backtest</button>
-        </div>
-        <div id="btOutput" style="font-size: 0.83rem; color: var(--muted);">
-          Click <b>Run Real History Backtest</b> to pull &amp; cache <b>real JustMarkets / MT5 historical M5 candles + real spreads</b> onto disk and compare <i>Raw Quant Signals</i> vs. <i>Multi-Agent Committee + Risk Firewall</i>.
+          <button class="btn-primary" onclick="runBacktest()">▶ Run Real Backtest</button>
         </div>
 
-        <h2 style="margin-top: 20px;">Settled Reflection Memory (XAUUSD Lessons)</h2>
-        <div id="lessonsBox"></div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Multi-Agent Committee &amp; Deterministic Risk Audit Trail</h2>
-      <div id="auditTrail"></div>
+        <div id="btOutput" style="font-size:0.8rem; color:var(--muted);">
+          Select horizon and click <b>▶ Run Real Backtest</b> to pull &amp; cache real JustMarkets MT5 M5 candles + real spreads and plot <i>Raw Quant</i> vs. <i>Multi-Agent Committee</i> equity curves.
+        </div>
+      </section>
     </div>
   </div>
+
+  <div id="toast" class="toast-banner"></div>
 
   <script>
     let currentKillSwitch = false;
     let currentAutopilot = false;
+    let selectedSymbol = 'XAUUSD';
+    let activeRightTab = 'stream';
+    let localCountdown = 0;
+    let latestCandlePayload = null;
+
+    // Restore persisted HUD theme
+    const savedTheme = localStorage.getItem('ta001_hud_theme') || 'cyber-gold';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+    document.addEventListener('DOMContentLoaded', () => {
+      const sel = document.getElementById('themeSelect');
+      if (sel) sel.value = savedTheme;
+    });
+
+    function setTheme(themeName) {
+      document.documentElement.setAttribute('data-theme', themeName);
+      localStorage.setItem('ta001_hud_theme', themeName);
+      if (latestCandlePayload) drawCandlestickChart(latestCandlePayload);
+    }
 
     function showToast(msg) {
       const el = document.getElementById('toast');
       el.textContent = msg;
       el.style.display = 'block';
-      setTimeout(() => { el.style.display = 'none'; }, 5000);
+      clearTimeout(window._toastTimer);
+      window._toastTimer = setTimeout(() => { el.style.display = 'none'; }, 4600);
+    }
+
+    function esc(val) {
+      return String(val ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function switchRightTab(tab) {
+      activeRightTab = tab;
+      document.getElementById('tabStreamBtn').classList.toggle('active', tab === 'stream');
+      document.getElementById('tabDebateBtn').classList.toggle('active', tab === 'debate');
+      document.getElementById('streamPane').style.display = tab === 'stream' ? 'block' : 'none';
+      document.getElementById('debatePane').style.display = tab === 'debate' ? 'block' : 'none';
+    }
+
+    function selectWatchlistSymbol(sym) {
+      selectedSymbol = sym;
+      fetchCandles(sym);
+    }
+
+    function buildRadialGaugeSVG(label, valuePct, capPct, displayVal, subText, warnRatio = 0.75) {
+      const ratio = capPct > 0 ? Math.min(1.0, Math.abs(valuePct) / capPct) : 0;
+      const r = 34;
+      const c = Math.PI * r; // Half-circle arc length
+      const dashOffset = c * (1 - ratio);
+      const strokeColor = ratio >= 0.92 ? 'var(--red)' : (ratio >= warnRatio ? 'var(--amber)' : 'var(--green)');
+      return `
+        <div class="gauge-card">
+          <svg viewBox="0 0 90 52" width="108" height="62">
+            <path d="M 11 45 A 34 34 0 0 1 79 45" fill="none" stroke="rgba(148,163,184,0.18)" stroke-width="7" stroke-linecap="round"/>
+            <path d="M 11 45 A 34 34 0 0 1 79 45" fill="none" stroke="${strokeColor}" stroke-width="7" stroke-linecap="round"
+              stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${dashOffset.toFixed(1)}"/>
+            <text x="45" y="42" text-anchor="middle" fill="var(--text)" font-size="11.5" font-weight="800" font-family="monospace">${displayVal}</text>
+          </svg>
+          <div style="font-size:0.74rem; font-weight:700; margin-top:2px;">${label}</div>
+          <div style="font-size:0.68rem; color:var(--muted); font-family:var(--mono);">${subText}</div>
+        </div>
+      `;
+    }
+
+    function renderPipelineAndAgents(telemetry) {
+      if (!telemetry) return;
+      document.getElementById('liveSpinner').style.display = telemetry.is_running ? 'inline-block' : 'none';
+      document.getElementById('pipelineHeadline').textContent = telemetry.headline || 'Monitoring MT5 Live';
+      document.getElementById('cycleStats').textContent =
+        `Cycles: ${telemetry.cycles_run} | Last Scan: ${telemetry.last_cycle_ms}ms`;
+
+      const track = document.getElementById('pipelineTrack');
+      track.innerHTML = (telemetry.stages || []).map(st => {
+        const badgeTxt = st.status.toUpperCase();
+        return `
+          <div class="stage-node ${st.status}">
+            <div class="stage-top">
+              <span>STEP 0${st.step}</span>
+              <span>${st.ms > 0 ? st.ms + 'ms' : badgeTxt}</span>
+            </div>
+            <div class="stage-name">${st.title}</div>
+            <div class="stage-role">${st.sub}</div>
+            <div class="stage-detail" title="${st.detail}">${st.detail}</div>
+          </div>
+        `;
+      }).join('');
+
+      const swarm = document.getElementById('agentSwarmGrid');
+      swarm.innerHTML = (telemetry.agents || []).map(ag => {
+        const confPct = Math.round((ag.confidence || 0) * 100);
+        const pillCls = ag.status === 'APPROVED' || ag.status === 'ARMED' || ag.status === 'ACTIVE'
+          ? 'pill-green'
+          : (ag.status === 'VETO' || ag.status === 'BLOCKED' ? 'pill-red' : 'pill-cyan');
+        return `
+          <div class="agent-card state-${ag.status}">
+            <div>
+              <div class="agent-head">
+                <div>
+                  <div class="agent-name">${ag.name}</div>
+                  <div class="agent-role">${ag.role}</div>
+                </div>
+                <span class="pill ${pillCls}" style="font-size:0.63rem; padding:2px 6px;">${ag.stance || ag.status}</span>
+              </div>
+              <div class="agent-task" style="margin-top:6px;" title="${ag.task}">${ag.task}</div>
+            </div>
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:0.67rem; color:var(--muted); font-family:var(--mono); margin-bottom:3px;">
+                <span>Focus: ${ag.symbol}</span>
+                <span>Conf: ${confPct}%</span>
+              </div>
+              <div class="conf-bar-bg"><div class="conf-bar-fill" style="width:${confPct}%;"></div></div>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      // Render Live Thought Stream
+      const streamEl = document.getElementById('streamPane');
+      const events = telemetry.events || [];
+      streamEl.innerHTML = events.map(ev => `
+        <div class="log-line">
+          <span style="color:var(--muted);">${esc(ev.ts)}</span>
+          <span class="lvl-${esc(ev.level)}" style="font-weight:700;">[${esc(ev.agent)}]</span>
+          <span class="log-sym" style="color:var(--accent); font-weight:700;">${esc(ev.symbol)}</span>
+          <span style="color:#e2e8f0;">${esc(ev.message)}</span>
+        </div>
+      `).join('');
+    }
+
+    function renderSlotsAndPositions(slotPolicy, positions) {
+      const baseMax = slotPolicy ? slotPolicy.base_max_positions : 2;
+      const nonGoldPos = positions.filter(p => p.symbol !== 'XAUUSD');
+      const goldPos = positions.find(p => p.symbol === 'XAUUSD');
+
+      // Build 3-slot visual matrix: Slot 1, Slot 2, and Slot 3 (VIP Gold Reserved)
+      const slotCards = [];
+      for (let i = 0; i < baseMax; i++) {
+        const p = nonGoldPos[i] || null;
+        if (p) {
+          slotCards.push(`
+            <div class="slot-box occupied">
+              <div>
+                <div style="font-size:0.68rem; color:var(--muted); font-family:var(--mono);">BASE SLOT #${i + 1}</div>
+                <div style="font-weight:800;">${p.symbol} <span style="color:${p.side === 'LONG' ? 'var(--green)' : 'var(--red)'}">${p.side}</span> (${p.volume}L)</div>
+              </div>
+              <span class="pill pill-green">${p.current_r >= 0 ? '+' : ''}${p.current_r}R</span>
+            </div>
+          `);
+        } else {
+          slotCards.push(`
+            <div class="slot-box">
+              <div>
+                <div style="font-size:0.68rem; color:var(--muted); font-family:var(--mono);">BASE SLOT #${i + 1} (ANY ASSET)</div>
+                <div style="color:var(--muted);">Open Capacity — Ready</div>
+              </div>
+              <span class="pill" style="opacity:0.65;">STANDBY</span>
+            </div>
+          `);
+        }
+      }
+
+      // Slot #3: Strictly Reserved for Tier-1 Gold (XAUUSD)
+      if (goldPos) {
+        slotCards.push(`
+          <div class="slot-box vip-gold occupied">
+            <div>
+              <div style="font-size:0.68rem; color:var(--accent); font-family:var(--mono);">👑 VIP SLOT #${baseMax + 1} (XAUUSD RESERVED)</div>
+              <div style="font-weight:800; color:var(--accent);">XAUUSD ${goldPos.side} (${goldPos.volume}L · #${goldPos.ticket})</div>
+            </div>
+            <span class="pill pill-green">${goldPos.current_r >= 0 ? '+' : ''}${goldPos.current_r}R</span>
+          </div>
+        `);
+      } else {
+        slotCards.push(`
+          <div class="slot-box vip-gold">
+            <div>
+              <div style="font-size:0.68rem; color:var(--accent); font-family:var(--mono);">👑 VIP SLOT #${baseMax + 1} (GOLD ONLY)</div>
+              <div style="color:#fde68a; font-weight:600;">Reserved for XAUUSD — Never Blocked by 2 FX/Index Trades</div>
+            </div>
+            <span class="pill">ARMED</span>
+          </div>
+        `);
+      }
+      document.getElementById('slotMatrix').innerHTML = slotCards.join('');
+
+      const deck = document.getElementById('activeTradesDeck');
+      if (!positions || positions.length === 0) {
+        deck.innerHTML = `
+          <div style="padding:14px; border-radius:10px; background:rgba(6,10,20,0.55); border:1px solid var(--border); color:var(--muted); font-size:0.81rem; text-align:center;">
+            No active MT5 positions right now — Multi-Agent Scanner is hunting A/A+ setups (XAUUSD Priority #1).
+          </div>
+        `;
+        return;
+      }
+
+      const stepNames = [
+        '1. MT5 Filled',
+        '2. SL/TP Armed',
+        '3. Pushing +1R',
+        '4. BE Shield 🛡️',
+        '5. TP Target 🎯'
+      ];
+
+      deck.innerHTML = positions.map(p => {
+        const pnlColor = p.unrealized_pnl >= 0 ? 'var(--green)' : 'var(--red)';
+        const stepsHtml = stepNames.map((nm, idx) => {
+          const sNum = idx + 1;
+          const cls = sNum < p.lifecycle_step ? 'reached' : (sNum === p.lifecycle_step ? 'current' : '');
+          return `<div class="step-chip ${cls}">${nm}</div>`;
+        }).join('');
+
+        return `
+          <div class="trade-lifecycle-card">
+            <div class="trade-top">
+              <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                <span class="pill ${p.symbol === 'XAUUSD' ? '' : 'pill-cyan'}">#${p.ticket} · ${p.symbol}</span>
+                <b style="color:${p.side === 'LONG' ? 'var(--green)' : 'var(--red)'}; font-size:0.92rem;">${p.side} ${p.volume} LOTS</b>
+                <span style="font-family:var(--mono); font-size:0.78rem; color:var(--muted);">
+                  Entry: <b>${p.entry_price}</b> &rarr; Live: <b style="color:var(--text);">${p.current_price}</b>
+                </span>
+                <span class="pill ${p.be_locked ? 'pill-green' : 'pill-cyan'}">${p.lifecycle_label}</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:12px;">
+                <div style="text-align:right; font-family:var(--mono);">
+                  <span style="font-size:1.05rem; font-weight:800; color:${pnlColor};">
+                    ${p.unrealized_pnl >= 0 ? '+' : ''}$${p.unrealized_pnl.toFixed(2)}
+                  </span>
+                  <span style="font-size:0.76rem; color:var(--muted); margin-left:6px;">(${p.current_r >= 0 ? '+' : ''}${p.current_r}R)</span>
+                </div>
+                <button class="btn-kill" style="padding:5px 10px; font-size:0.74rem;" onclick="closeTicket(${p.ticket})">✕ Close</button>
+              </div>
+            </div>
+
+            <div class="stepper-row">${stepsHtml}</div>
+
+            <div class="r-laser-track">
+              <div class="r-marker" style="left:${p.entry_pct}%;" title="Entry (0.0R)"></div>
+              <div class="r-marker" style="left:${p.be_pct}%; background:var(--accent);" title="+1.0R Auto Break-Even Trigger (${p.be_trigger_price})"></div>
+              <div class="r-puck" style="left:${p.progress_pct}%;"></div>
+            </div>
+            <div class="r-labels">
+              <span style="color:var(--red);">SL: ${p.sl} (-1.0R)</span>
+              <span>Entry: ${p.entry_price} (0R)</span>
+              <span style="color:var(--accent);">+1R BE Lock: ${p.be_trigger_price}</span>
+              <span style="color:var(--green);">TP: ${p.tp} (+${p.target_r}R)</span>
+            </div>
+          </div>
+        `;
+      }).join('');
     }
 
     async function fetchStatus() {
       try {
         const res = await fetch('/api/status');
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
-        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
 
         currentKillSwitch = data.kill_switch_active;
+        document.getElementById('beaconDot').className = 'beacon-dot' + (currentKillSwitch ? ' halted' : '');
+
         const modeBadge = document.getElementById('modeBadge');
-        modeBadge.textContent = currentKillSwitch ? 'HALTED (KILL SWITCH)' : data.trading_mode.toUpperCase();
-        modeBadge.className = 'badge ' + (currentKillSwitch ? 'badge-red' : 'badge-green');
+        modeBadge.textContent = currentKillSwitch ? 'HALTED · KILL SWITCH' : data.trading_mode.toUpperCase();
+        modeBadge.className = 'pill ' + (currentKillSwitch ? 'pill-red' : 'pill-green');
+
+        document.getElementById('sessionBadge').textContent = `${data.session_label} · ${data.server_time_utc}`;
 
         if (data.autopilot) {
           currentAutopilot = data.autopilot.enabled;
+          localCountdown = Math.ceil(data.autopilot.seconds_until_next || 0);
+          document.getElementById('nextScanCountdown').textContent = currentAutopilot ? `${localCountdown}s` : 'PAUSED';
           const apBtn = document.getElementById('autopilotBtn');
           apBtn.textContent = currentAutopilot
             ? `🤖 Autopilot (${data.autopilot.interval_seconds}s): ON`
-            : `⏸ Autopilot (${data.autopilot.interval_seconds}s): PAUSED`;
-          apBtn.style.borderColor = currentAutopilot ? 'var(--green)' : 'var(--border)';
-          apBtn.style.color = currentAutopilot ? 'var(--green)' : 'var(--text)';
+            : `⏸ Autopilot: PAUSED`;
+          apBtn.className = currentAutopilot ? 'btn-autopilot-on' : '';
         }
 
-        document.getElementById('killBtn').textContent = currentKillSwitch
-          ? '✅ Resume Agent Trading'
-          : '🛑 Emergency Kill Switch';
+        document.getElementById('killBtn').textContent = currentKillSwitch ? '✅ Re-Arm Engine' : '🛑 Kill Switch';
+        document.getElementById('brainMeta').textContent =
+          `Brain: ${data.ollama.active_brain}  |  Broker: ${data.account.server}  |  Max Slots: ${data.slot_policy.base_max_positions} Base + 1 Gold VIP`;
 
-        document.getElementById('brainStatus').textContent =
-          `Brain: ${data.ollama.active_brain} | Broker: ${data.account.server}`;
+        // Render Live Pipeline, Agent Swarm & Stream
+        renderPipelineAndAgents(data.telemetry);
 
-        document.getElementById('kpiEquity').textContent = `$${data.account.equity.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-        document.getElementById('kpiBalance').textContent =
-          `Balance: $${data.account.balance.toFixed(2)} | Free Margin: $${data.account.free_margin.toFixed(2)}`;
+        // Render 2+1 Slots & Active Positions
+        renderSlotsAndPositions(data.slot_policy, data.open_positions || []);
 
-        document.getElementById('kpiDailyDD').textContent = `${data.risk_limits.daily_drawdown_pct.toFixed(2)}%`;
-        document.getElementById('kpiDailyCap').textContent =
-          `Daily Lock: ${data.risk_limits.max_daily_loss_pct.toFixed(2)}% | Risk: ${data.risk_limits.risk_per_trade_pct}% (Gold 0.01≤${data.risk_limits.gold_min_lot_max_risk_pct.toFixed(2)}%)`;
-
-        const usdRisk = data.risk_limits.current_net_usd_risk_pct;
-        document.getElementById('kpiUsdRisk').textContent = `${usdRisk >= 0 ? '+' : ''}${usdRisk.toFixed(2)}%`;
-        document.getElementById('kpiUsdCap').textContent =
-          `Correlated USD Cap: ±${data.risk_limits.max_net_usd_risk_pct.toFixed(2)}% (Solo Gold BE Lock)`;
-
-        document.getElementById('kpiOpenCount').textContent = data.open_positions.length;
-
-        // Watchlist
+        // Render Watchlist
         const wlBody = document.getElementById('watchlistBody');
-        wlBody.innerHTML = data.watchlist.map(w => {
-          const brokerSub = (w.broker_symbol && w.broker_symbol !== w.symbol)
-            ? ` <span style="font-weight:400; font-size:0.74rem; color:var(--muted);">(${w.broker_symbol})</span>`
-            : '';
+        wlBody.innerHTML = (data.watchlist || []).map(w => {
+          const isSel = w.symbol === selectedSymbol ? 'active-sym' : '';
+          const bSub = (w.broker_symbol && w.broker_symbol !== w.symbol)
+            ? ` <span style="color:var(--muted); font-size:0.71rem;">(${w.broker_symbol})</span>` : '';
           if (w.available === false) {
             return `
-              <tr>
-                <td><span class="badge">T${w.tier}</span></td>
-                <td style="font-weight:700; color:var(--muted)">${w.symbol}${brokerSub}</td>
-                <td>—</td>
-                <td>—</td>
-                <td>—</td>
-                <td>—</td>
-                <td><span class="badge badge-red">OFFLINE</span></td>
-              </tr>
-            `;
+              <tr class="wl-row ${isSel}" onclick="selectWatchlistSymbol('${w.symbol}')">
+                <td><span class="pill">T${w.tier}</span></td>
+                <td style="color:var(--muted); font-weight:700;">${w.symbol}${bSub}</td>
+                <td>—</td><td>—</td><td>—</td><td>—</td>
+                <td><span class="pill pill-red">OFFLINE</span></td>
+              </tr>`;
           }
           return `
-            <tr>
-              <td><span class="badge">T${w.tier}</span></td>
-              <td style="font-weight:700; color:${w.symbol === 'XAUUSD' ? 'var(--gold)' : 'var(--text)'}">${w.symbol}${brokerSub}</td>
-              <td>${w.bid}</td>
-              <td>${w.ask}</td>
-              <td style="font-size:0.76rem; color:var(--muted);">${w.unit_label || '—'}</td>
-              <td>${w.spread_points} / ${w.max_spread_points} pts</td>
-              <td><span class="badge ${w.spread_ok ? 'badge-green' : 'badge-red'}">${w.spread_ok ? 'READY' : 'WIDE'}</span></td>
-            </tr>
-          `;
+            <tr class="wl-row ${isSel}" onclick="selectWatchlistSymbol('${w.symbol}')">
+              <td><span class="pill">T${w.tier}</span></td>
+              <td style="font-weight:800; color:${w.symbol === 'XAUUSD' ? 'var(--accent)' : 'var(--text)'};">
+                ${w.symbol === 'XAUUSD' ? '👑 ' : ''}${w.symbol}${bSub}
+              </td>
+              <td style="font-family:var(--mono);">${w.bid}</td>
+              <td style="font-family:var(--mono);">${w.ask}</td>
+              <td style="font-family:var(--mono); font-size:0.72rem; color:var(--muted);">${w.unit_label || '—'}</td>
+              <td style="font-family:var(--mono);">${w.spread_points}/${w.max_spread_points}</td>
+              <td><span class="pill ${w.spread_ok ? 'pill-green' : 'pill-red'}">${w.spread_ok ? 'READY' : 'WIDE'}</span></td>
+            </tr>`;
         }).join('');
 
-        // Open Positions
-        const posBody = document.getElementById('positionsBody');
-        if (data.open_positions.length === 0) {
-          posBody.innerHTML = `<tr><td colspan="8" style="color:var(--muted); text-align:center;">No open positions — waiting for A/A+ setup</td></tr>`;
+        // Render Committee Debate Verdicts Tab
+        const debateEl = document.getElementById('debatePane');
+        if (!data.recent_audits || data.recent_audits.length === 0) {
+          debateEl.innerHTML = `<div style="color:var(--muted); padding:16px;">No candidate debates yet. Click <b>⚡ Scan &amp; Execute</b> to trigger full evaluation.</div>`;
         } else {
-          posBody.innerHTML = data.open_positions.map(p => `
-            <tr>
-              <td>#${p.ticket}</td>
-              <td><b>${p.symbol}</b></td>
-              <td class="${p.side === 'LONG' ? 'pos-long' : 'pos-short'}">${p.side}</td>
-              <td>${p.volume}</td>
-              <td>${p.entry_price}</td>
-              <td style="font-size:0.77rem;">SL: ${p.sl}<br>TP: ${p.tp}</td>
-              <td style="color:${p.unrealized_pnl >= 0 ? 'var(--green)' : 'var(--red)'}; font-weight:700;">
-                $${p.unrealized_pnl.toFixed(2)}
-              </td>
-              <td><button onclick="closeTicket(${p.ticket})" style="padding:4px 9px; font-size:0.75rem;">Close</button></td>
-            </tr>
-          `).join('');
-        }
-
-        // Lessons
-        document.getElementById('lessonsBox').innerHTML = data.gold_lessons.map(l =>
-          `<div class="lesson-pill">${l}</div>`
-        ).join('');
-
-        // Audits
-        const auditBox = document.getElementById('auditTrail');
-        if (data.recent_audits.length === 0) {
-          auditBox.innerHTML = `<div style="color:var(--muted); font-size:0.85rem;">No agent cycles logged yet. Click <b>⚡ Scan & Execute Cycle</b> above to run a live Gold-First evaluation!</div>`;
-        } else {
-          auditBox.innerHTML = data.recent_audits.map(a => {
+          debateEl.innerHTML = data.recent_audits.map(a => {
             const s = a.setup;
             const d = a.decision;
             const r = a.risk;
             const rec = a.receipt;
-            const approvedBadge = (rec && rec.success)
-              ? `<span class="badge badge-green">EXECUTED #${rec.ticket} (${rec.volume} lots)</span>`
+            const statusPill = (rec && rec.success)
+              ? `<span class="pill pill-green">FILLED #${rec.ticket} (${rec.volume}L)</span>`
               : (r && !r.approved)
-                ? `<span class="badge badge-red">RISK BLOCKED: ${r.rejection_reasons[0]}</span>`
-                : `<span class="badge">${d.action} (${d.grade})</span>`;
+                ? `<span class="pill pill-red">FIREWALL: ${r.rejection_reasons[0].split(':')[0]}</span>`
+                : `<span class="pill">${d.action} (${d.grade})</span>`;
 
             return `
-              <div class="audit-item">
-                <div class="audit-head">
-                  <span>
-                    <b style="color:${s.symbol === 'XAUUSD' ? 'var(--gold)' : '#fff'}">${s.symbol}</b>
-                    &middot; <span class="${s.side === 'LONG' ? 'pos-long' : 'pos-short'}">${s.side}</span>
-                    &middot; ${s.setup_type} (QuantScore: ${s.quant_score}/100 | R:R ${s.rr_ratio})
-                  </span>
-                  ${approvedBadge}
+              <div class="debate-card">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:5px;">
+                  <div>
+                    <b style="color:${s.symbol === 'XAUUSD' ? 'var(--accent)' : '#fff'};">${s.symbol}</b>
+                    &middot; <b style="color:${s.side === 'LONG' ? 'var(--green)' : 'var(--red)'};">${s.side}</b>
+                    &middot; <span style="color:var(--muted);">${s.setup_type} (Q:${s.quant_score} | RR:${s.rr_ratio})</span>
+                  </div>
+                  ${statusPill}
                 </div>
-                <div style="color:#d1d5db; margin-bottom:6px;">${d.thesis_summary}</div>
-                <div class="opinions-grid">
-                  ${d.opinions.map(op => `
-                    <div class="op-box">
-                      <b>${op.agent_name}</b>: ${op.stance} (${Math.round(op.confidence * 100)}%)<br>
-                      <span style="color:var(--muted);">${(op.key_arguments[0] || op.risk_flags[0] || '')}</span>
+                <div style="color:#e2e8f0; font-family:Inter,sans-serif; font-size:0.78rem;">${d.thesis_summary}</div>
+                <div class="debate-ops">
+                  ${(d.opinions || []).map(op => `
+                    <div class="op-mini">
+                      <b style="color:var(--cyan);">${op.agent_name.replace(/_/g, ' ')}</b><br/>
+                      <span>${op.stance} (${Math.round(op.confidence * 100)}%)</span>
+                      <div style="color:var(--muted); margin-top:2px;">${op.risk_flags[0] || op.key_arguments[0] || ''}</div>
                     </div>
                   `).join('')}
                 </div>
@@ -468,22 +1344,252 @@
             `;
           }).join('');
         }
+
+        // KPIs & Radial Risk Gauges
+        document.getElementById('kpiEquity').textContent = `$${data.account.equity.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+        document.getElementById('kpiBalance').textContent = `$${data.account.balance.toFixed(2)}`;
+        document.getElementById('kpiFreeMargin').textContent = `$${data.account.free_margin.toFixed(2)}`;
+
+        const rl = data.risk_limits;
+        document.getElementById('riskGaugesRow').innerHTML = [
+          buildRadialGaugeSVG(
+            'Daily DD Lock',
+            rl.daily_drawdown_pct,
+            rl.max_daily_loss_pct,
+            `${rl.daily_drawdown_pct.toFixed(2)}%`,
+            `Max Cap: ${rl.max_daily_loss_pct.toFixed(2)}%`
+          ),
+          buildRadialGaugeSVG(
+            'USD Correlation',
+            Math.abs(rl.current_net_usd_risk_pct),
+            rl.max_net_usd_risk_pct,
+            `${rl.current_net_usd_risk_pct >= 0 ? '+' : ''}${rl.current_net_usd_risk_pct.toFixed(2)}%`,
+            `FX Cap: ±${rl.max_net_usd_risk_pct.toFixed(2)}%`
+          ),
+          buildRadialGaugeSVG(
+            '2+1 Slot Load',
+            data.slot_policy.open_total,
+            data.slot_policy.total_max_with_gold,
+            `${data.slot_policy.open_total}/${data.slot_policy.total_max_with_gold}`,
+            `2 Base + 1 Gold VIP`
+          )
+        ].join('');
+
+        document.getElementById('lessonsBox').innerHTML = (data.gold_lessons || []).map(l =>
+          `<div class="lesson-item">${l}</div>`
+        ).join('');
       } catch (err) {
         console.error(err);
       }
     }
 
+    async function fetchCandles(sym) {
+      try {
+        const res = await fetch(`/api/candles/${sym}?limit=80`);
+        if (!res.ok) return;
+        const payload = await res.json();
+        latestCandlePayload = payload;
+        document.getElementById('chartSymTitle').textContent =
+          payload.broker_symbol && payload.broker_symbol !== payload.symbol
+            ? `${payload.symbol} (${payload.broker_symbol})`
+            : payload.symbol;
+        if (payload.candles && payload.candles.length > 0) {
+          document.getElementById('chartIndicatorsSub').textContent =
+            `H1 Bias: ${payload.htf_bias}  |  ADX: ${payload.adx}  |  RSI: ${payload.rsi}  |  Spread: ${payload.spread_points} pts`;
+          drawCandlestickChart(payload);
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    function drawCandlestickChart(payload) {
+      const canvas = document.getElementById('candleCanvas');
+      if (!canvas || !payload || !payload.candles || payload.candles.length === 0) return;
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.parentElement.getBoundingClientRect();
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      const ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+
+      const W = rect.width;
+      const H = rect.height;
+      const padL = 10, padR = 68, padT = 26, padB = 22;
+      const plotW = W - padL - padR;
+      const plotH = H - padT - padB;
+
+      ctx.clearRect(0, 0, W, H);
+
+      const bars = payload.candles;
+      let minP = Infinity, maxP = -Infinity;
+      bars.forEach(b => {
+        minP = Math.min(minP, b.l, b.ema20, b.ema50, b.vwap);
+        maxP = Math.max(maxP, b.h, b.ema20, b.ema50, b.vwap);
+      });
+      if (payload.active_position) {
+        const ap = payload.active_position;
+        if (ap.sl > 0) { minP = Math.min(minP, ap.sl); maxP = Math.max(maxP, ap.sl); }
+        if (ap.tp > 0) { minP = Math.min(minP, ap.tp); maxP = Math.max(maxP, ap.tp); }
+      }
+      const padPrice = (maxP - minP) * 0.08 || 1;
+      minP -= padPrice;
+      maxP += padPrice;
+
+      const yOf = p => padT + ((maxP - p) / (maxP - minP)) * plotH;
+      const stepX = plotW / bars.length;
+
+      // Subtle horizontal price grid
+      ctx.strokeStyle = 'rgba(139, 155, 184, 0.12)';
+      ctx.lineWidth = 1;
+      ctx.font = '10px monospace';
+      ctx.fillStyle = '#8b9bb8';
+      const decimals = maxP > 500 ? 2 : (maxP > 20 ? 3 : 5);
+      for (let g = 0; g <= 4; g++) {
+        const py = padT + (plotH * g) / 4;
+        const pVal = maxP - ((maxP - minP) * g) / 4;
+        ctx.beginPath();
+        ctx.moveTo(padL, py);
+        ctx.lineTo(W - padR, py);
+        ctx.stroke();
+        ctx.fillText(pVal.toFixed(decimals), W - padR + 5, py + 3);
+      }
+
+      // Helper for indicator polylines
+      function drawLine(key, color, dashed = false) {
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.4;
+        if (dashed) ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        bars.forEach((b, idx) => {
+          const x = padL + idx * stepX + stepX * 0.5;
+          const y = yOf(b[key]);
+          if (idx === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      drawLine('ema50', '#a78bfa', false);
+      drawLine('ema20', '#38bdf8', false);
+      drawLine('vwap', '#f5b841', true);
+
+      // Draw M5 Candlesticks + Sweep/FVG markers
+      const bodyW = Math.max(2.5, stepX * 0.62);
+      bars.forEach((b, idx) => {
+        const cx = padL + idx * stepX + stepX * 0.5;
+        const bull = b.c >= b.o;
+        const col = bull ? '#00f5a0' : '#ff3b5c';
+
+        ctx.strokeStyle = col;
+        ctx.lineWidth = 1.1;
+        ctx.beginPath();
+        ctx.moveTo(cx, yOf(b.h));
+        ctx.lineTo(cx, yOf(b.l));
+        ctx.stroke();
+
+        const topY = yOf(Math.max(b.o, b.c));
+        const botY = yOf(Math.min(b.o, b.c));
+        ctx.fillStyle = col;
+        ctx.fillRect(cx - bodyW / 2, topY, bodyW, Math.max(1.5, botY - topY));
+
+        if (b.sweep_low) {
+          ctx.fillStyle = '#00f5a0';
+          ctx.fillText('▲', cx - 3, yOf(b.l) + 11);
+        } else if (b.sweep_high) {
+          ctx.fillStyle = '#ff3b5c';
+          ctx.fillText('▼', cx - 3, yOf(b.h) - 4);
+        }
+
+        if (idx % 16 === 0) {
+          ctx.fillStyle = '#64748b';
+          ctx.fillText(b.ts, cx - 14, H - 5);
+        }
+      });
+
+      // Overlay Active Position Entry / SL / TP laser lines if open
+      if (payload.active_position) {
+        const ap = payload.active_position;
+        const levels = [
+          { price: ap.entry_price, color: '#00d2ff', tag: 'ENTRY' },
+          { price: ap.sl, color: '#ff3b5c', tag: ap.be_locked ? 'BE SL' : 'STOP' },
+          { price: ap.tp, color: '#00f5a0', tag: 'TARGET' }
+        ];
+        levels.forEach(lv => {
+          if (!lv.price || lv.price <= 0) return;
+          const ly = yOf(lv.price);
+          ctx.save();
+          ctx.strokeStyle = lv.color;
+          ctx.lineWidth = 1.3;
+          ctx.setLineDash([6, 3]);
+          ctx.beginPath();
+          ctx.moveTo(padL, ly);
+          ctx.lineTo(W - padR, ly);
+          ctx.stroke();
+          ctx.fillStyle = lv.color;
+          ctx.fillRect(W - padR + 2, ly - 8, 62, 15);
+          ctx.fillStyle = '#05080f';
+          ctx.font = 'bold 9px monospace';
+          ctx.fillText(lv.tag, W - padR + 6, ly + 3);
+          ctx.restore();
+        });
+      }
+    }
+
+    function drawEquityComparisonCanvas(rawCurve, agentCurve) {
+      const canvas = document.getElementById('btEquityCanvas');
+      if (!canvas || !rawCurve || !agentCurve) return;
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.parentElement.getBoundingClientRect();
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      const ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+
+      const W = rect.width, H = rect.height;
+      const pad = 16;
+      const allVals = [...rawCurve.map(x => x.equity), ...agentCurve.map(x => x.equity)];
+      if (allVals.length < 2) return;
+      let minE = Math.min(...allVals), maxE = Math.max(...allVals);
+      const span = (maxE - minE) || 1;
+      minE -= span * 0.08;
+      maxE += span * 0.08;
+
+      function plotSeries(series, color, width, dashed) {
+        if (series.length < 2) return;
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = width;
+        if (dashed) ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        series.forEach((pt, idx) => {
+          const x = pad + (idx / (series.length - 1)) * (W - pad * 2);
+          const y = pad + ((maxE - pt.equity) / (maxE - minE)) * (H - pad * 2);
+          if (idx === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      plotSeries(rawCurve, '#8b9bb8', 1.5, true);
+      plotSeries(agentCurve, '#f5b841', 2.4, false);
+    }
+
     async function runScanCycle(autoExec) {
-      showToast(autoExec ? 'Running Gold-First Scanner + Multi-Agent Committee + Risk Gate...' : 'Running Read-Only Dry Scan...');
+      showToast(autoExec ? '⚡ Launching 6-Stage Gold-First Scan & Execution Cycle...' : '🔍 Running Dry-Run Multi-Agent Scan...');
       try {
         const res = await fetch(`/api/scan?auto_execute=${autoExec}`, { method: 'POST' });
-        if (!res.ok) throw new Error(`Scan HTTP ${res.status}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const out = await res.json();
-        showToast(`Cycle finished: ${out.candidates_found} candidate setup(s) evaluated.`);
+        showToast(`Cycle Complete: ${out.candidates_found} setup(s) evaluated.`);
       } catch (err) {
         showToast(`Scan error: ${err.message}`);
       }
       await fetchStatus();
+      await fetchCandles(selectedSymbol);
     }
 
     async function toggleAutopilot() {
@@ -494,7 +1600,7 @@
         body: JSON.stringify({ enabled: nextState })
       });
       if (res.ok) {
-        showToast(nextState ? '15s Gold-First Autopilot ENABLED.' : 'Autopilot PAUSED (manual scan still active).');
+        showToast(nextState ? '🤖 15s Autonomous Gold-First Autopilot ARMED.' : '⏸ Autopilot PAUSED.');
       }
       await fetchStatus();
     }
@@ -502,14 +1608,15 @@
     async function toggleKillSwitch() {
       const url = currentKillSwitch ? '/api/reset-kill-switch' : '/api/kill-switch';
       await fetch(url, { method: 'POST' });
-      showToast(currentKillSwitch ? 'Trading resumed.' : 'EMERGENCY KILL SWITCH ACTIVATED — All open positions closed!');
+      showToast(currentKillSwitch ? '✅ Engine Re-Armed.' : '🛑 EMERGENCY KILL SWITCH ACTIVATED!');
       await fetchStatus();
     }
 
     async function closeTicket(ticket) {
       await fetch(`/api/close/${ticket}`, { method: 'POST' });
-      showToast(`Closed position #${ticket}`);
+      showToast(`Closed MT5 Ticket #${ticket}`);
       await fetchStatus();
+      await fetchCandles(selectedSymbol);
     }
 
     async function runBacktest() {
@@ -517,7 +1624,7 @@
       const bars = parseInt(document.getElementById('btBars').value, 10);
       const starting_equity = parseFloat(document.getElementById('btEquity').value);
       const outEl = document.getElementById('btOutput');
-      outEl.innerHTML = `Fetching real MT5 historical M5 bars &amp; running spread-aware simulation on <b>${symbol}</b> (up to ${bars.toLocaleString()} bars)...`;
+      outEl.innerHTML = `<span class="scan-spinner"></span> Pulling &amp; normalizing real MT5 M5 history on <b>${symbol}</b> (up to ${bars.toLocaleString()} bars)...`;
 
       try {
         const res = await fetch('/api/backtest', {
@@ -525,50 +1632,68 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ symbol, bars, starting_equity, source: 'auto' })
         });
-        if (!res.ok) throw new Error(`Backtest HTTP ${res.status}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         const q = data.raw_quant_baseline;
         const a = data.agent_committee_filtered;
-        const srcBadgeClass = data.is_real_history ? 'badge-green' : '';
 
         outEl.innerHTML = `
-          <div style="margin-bottom:10px; padding:8px 10px; border-radius:7px; background:var(--panel-alt); border:1px solid var(--border); font-size:0.78rem;">
-            <div>
-              <span class="badge ${srcBadgeClass}">${data.is_real_history ? '🟢 REAL BROKER HISTORY' : '🟡 SYNTHETIC FALLBACK'}</span>
-              <b style="margin-left:6px;">${data.data_source}</b>
-            </div>
+          <div style="padding:8px 10px; border-radius:8px; background:var(--panel-alt); border:1px solid var(--border); font-family:var(--mono); font-size:0.73rem;">
+            <span class="pill ${data.is_real_history ? 'pill-green' : ''}">${data.is_real_history ? '🟢 REAL BROKER HISTORY' : '🟡 SYNTHETIC FALLBACK'}</span>
+            <b style="margin-left:6px;">${data.data_source}</b>
             <div style="color:var(--muted); margin-top:4px;">
-              Window: <b>${data.start_timestamp}</b> &rarr; <b>${data.end_timestamp}</b> (${data.bars_tested.toLocaleString()} M5 bars | Start Equity: $${data.starting_equity.toFixed(2)})
+              ${data.start_timestamp} &rarr; ${data.end_timestamp} (${data.bars_tested.toLocaleString()} M5 bars | Start $${data.starting_equity.toFixed(2)})
             </div>
           </div>
-          <div class="bt-compare">
-            <div class="op-box">
-              <div style="color:var(--muted); font-weight:600;">Baseline: Raw Quant Only</div>
-              <div style="font-size:1.15rem; font-weight:700; margin:4px 0; color:${q.net_return_pct >= 0 ? 'var(--green)' : 'var(--red)'}">
+
+          <div class="bt-curve-box"><canvas id="btEquityCanvas"></canvas></div>
+          <div style="display:flex; justify-content:space-between; font-family:var(--mono); font-size:0.69rem; color:var(--muted); margin-bottom:8px;">
+            <span>┈ Dashed: Raw Quant Baseline</span>
+            <span style="color:var(--accent);">━ Solid Gold: Multi-Agent Committee + Risk Gate</span>
+          </div>
+
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+            <div class="op-mini">
+              <div style="color:var(--muted); font-weight:700;">Raw Quant Baseline</div>
+              <div style="font-size:1.08rem; font-weight:800; color:${q.net_return_pct >= 0 ? 'var(--green)' : 'var(--red)'}; margin:3px 0;">
                 ${q.net_return_pct >= 0 ? '+' : ''}${q.net_return_pct}% ($${q.ending_equity.toFixed(2)})
               </div>
-              <div>Trades: <b>${q.total_trades}</b> | Win Rate: <b>${q.win_rate_pct}%</b></div>
-              <div>Profit Factor: <b>${q.profit_factor}</b> | Sharpe: <b>${q.sharpe_ratio}</b></div>
-              <div>Max DD: <b>${q.max_drawdown_pct}%</b> | Spread Paid: $${q.spread_cost_usd}</div>
+              <div>Trades: <b>${q.total_trades}</b> | WR: <b>${q.win_rate_pct}%</b></div>
+              <div>PF: <b>${q.profit_factor}</b> | Max DD: <b>${q.max_drawdown_pct}%</b></div>
             </div>
-            <div class="op-box" style="border-color: var(--gold);">
-              <div style="color:var(--gold); font-weight:600;">Full Agent Committee + Risk Gate</div>
-              <div style="font-size:1.15rem; font-weight:700; margin:4px 0; color:${a.net_return_pct >= 0 ? 'var(--green)' : 'var(--red)'}">
+            <div class="op-mini" style="border-color:var(--border-glow);">
+              <div style="color:var(--accent); font-weight:700;">Multi-Agent Committee</div>
+              <div style="font-size:1.08rem; font-weight:800; color:${a.net_return_pct >= 0 ? 'var(--green)' : 'var(--red)'}; margin:3px 0;">
                 ${a.net_return_pct >= 0 ? '+' : ''}${a.net_return_pct}% ($${a.ending_equity.toFixed(2)})
               </div>
-              <div>Trades: <b>${a.total_trades}</b> | Win Rate: <b>${a.win_rate_pct}%</b></div>
-              <div>Profit Factor: <b>${a.profit_factor}</b> | Sharpe: <b>${a.sharpe_ratio}</b></div>
-              <div>Max DD: <b>${a.max_drawdown_pct}%</b> | Spread Paid: $${a.spread_cost_usd}</div>
+              <div>Trades: <b>${a.total_trades}</b> | WR: <b>${a.win_rate_pct}%</b></div>
+              <div>PF: <b>${a.profit_factor}</b> | Max DD: <b>${a.max_drawdown_pct}%</b></div>
             </div>
           </div>
         `;
+        requestAnimationFrame(() => drawEquityComparisonCanvas(q.equity_curve, a.equity_curve));
       } catch (err) {
-        outEl.innerHTML = `<span style="color:var(--red);">Backtest failed: ${err.message}</span>`;
+        outEl.innerHTML = `<span style="color:var(--red);">Backtest error: ${err.message}</span>`;
       }
     }
 
+    // Smooth 1s local countdown tick + 2.5s live telemetry poll + 6s candle refresh
+    setInterval(() => {
+      if (currentAutopilot && localCountdown > 0) {
+        localCountdown -= 1;
+        const el = document.getElementById('nextScanCountdown');
+        if (el) el.textContent = `${localCountdown}s`;
+      }
+    }, 1000);
+
+    window.addEventListener('resize', () => {
+      if (latestCandlePayload) drawCandlestickChart(latestCandlePayload);
+    });
+
     fetchStatus();
-    setInterval(fetchStatus, 4000);
+    fetchCandles(selectedSymbol);
+    setInterval(fetchStatus, 2500);
+    setInterval(() => fetchCandles(selectedSymbol), 6000);
   </script>
 </body>
 </html>
