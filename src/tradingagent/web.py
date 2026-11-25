@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 from fastapi import FastAPI
@@ -54,21 +55,39 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         account = engine.broker.get_account_snapshot()
         positions = engine.broker.get_open_positions()
         ollama_ok, ollama_models = await engine.committee.check_ollama_health()
+        resolved_model = engine.committee.resolve_ollama_model(ollama_models)
 
         watchlist = []
         for prof in engine.scanner.ordered_symbols():
-            q = engine.broker.get_quote(prof.canonical)
-            watchlist.append({
-                "symbol": prof.canonical,
-                "broker_symbol": q.broker_symbol,
-                "tier": prof.tier,
-                "asset_class": prof.asset_class,
-                "bid": q.bid,
-                "ask": q.ask,
-                "spread_points": round(q.spread_points, 1),
-                "max_spread_points": prof.max_spread_points,
-                "spread_ok": q.spread_points <= prof.max_spread_points,
-            })
+            try:
+                q = engine.broker.get_quote(prof.canonical)
+                norm_spread = round(prof.canonical_spread_points(q.spread_price), 1)
+                watchlist.append({
+                    "symbol": prof.canonical,
+                    "broker_symbol": q.broker_symbol,
+                    "tier": prof.tier,
+                    "asset_class": prof.asset_class,
+                    "available": True,
+                    "bid": q.bid,
+                    "ask": q.ask,
+                    "spread_points": norm_spread,
+                    "max_spread_points": prof.max_spread_points,
+                    "spread_ok": norm_spread <= prof.max_spread_points,
+                })
+            except Exception as exc:
+                watchlist.append({
+                    "symbol": prof.canonical,
+                    "broker_symbol": engine.broker.mapper.to_broker(prof.canonical),
+                    "tier": prof.tier,
+                    "asset_class": prof.asset_class,
+                    "available": False,
+                    "bid": 0.0,
+                    "ask": 0.0,
+                    "spread_points": 0.0,
+                    "max_spread_points": prof.max_spread_points,
+                    "spread_ok": False,
+                    "error": str(exc),
+                })
 
         net_usd_pct = engine.risk.compute_open_net_usd_risk_pct(positions, account.equity)
 
@@ -79,9 +98,10 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
                 "online": ollama_ok,
                 "configured_quick_model": engine.settings.ollama_quick_model,
                 "configured_deep_model": engine.settings.ollama_deep_model,
+                "active_model": resolved_model,
                 "installed_models": ollama_models,
                 "active_brain": (
-                    f"Ollama Local ({engine.settings.ollama_deep_model})"
+                    f"Ollama Local ({resolved_model})"
                     if (ollama_ok and ollama_models)
                     else "Deterministic Multi-Agent Rubric (Zero-Fee Offline Ready)"
                 ),
@@ -126,17 +146,21 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             sym = "XAUUSD"
         prof = engine.profiles[sym]
         _, _, _, tick_val = DEFAULT_PRICES.get(sym, (100.0, 0.5, 10.0, 1.0))
-
         bars_count = max(400, min(5000, req.bars))
-        df = generate_realistic_intraday_dataset(symbol=sym, n_bars=bars_count, seed=101)
-        tester = SpreadAwareEventBacktester(
-            settings=engine.settings,
-            profile=prof,
-            memory=engine.memory,
-            tick_value_per_point=tick_val,
-        )
-        raw_quant = tester.run(df, starting_equity=req.starting_equity, use_agent_committee=False)
-        agent_filtered = tester.run(df, starting_equity=req.starting_equity, use_agent_committee=True)
+
+        def _compute_ablation() -> tuple[Any, Any]:
+            df = generate_realistic_intraday_dataset(symbol=sym, n_bars=bars_count, seed=101)
+            tester = SpreadAwareEventBacktester(
+                settings=engine.settings,
+                profile=prof,
+                memory=engine.memory,
+                tick_value_per_point=tick_val,
+            )
+            raw_q = tester.run(df, starting_equity=req.starting_equity, use_agent_committee=False)
+            agent_f = tester.run(df, starting_equity=req.starting_equity, use_agent_committee=True)
+            return raw_q, agent_f
+
+        raw_quant, agent_filtered = await asyncio.to_thread(_compute_ablation)
         return {
             "symbol": sym,
             "bars_tested": bars_count,

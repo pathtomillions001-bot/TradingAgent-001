@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 import uuid
 import pandas as pd
 
@@ -10,6 +11,8 @@ from tradingagent.broker import BrokerAdapter
 from tradingagent.config import AppSettings, SymbolProfile
 from tradingagent.indicators import compute_ema, detect_fvg_and_sweeps
 from tradingagent.models import CandidateSetup, OpenPosition, Side, SetupType
+
+logger = logging.getLogger(__name__)
 
 
 class GoldFirstScanner:
@@ -198,9 +201,9 @@ class GoldFirstScanner:
         now_utc: datetime | None = None,
     ) -> list[CandidateSetup]:
         """
-        Scans XAUUSD first. If XAUUSD produces a strong candidate (>=75 score) and Gold slot is open,
-        returns Gold immediately as top priority alongside secondary context; otherwise falls back to
-        Tier 2 (NAS100, BTCUSD) and Tier 3 (EURUSD, GBPUSD, USDCAD).
+        Scans XAUUSD first (Tier 1), followed by Tier 2 (NAS100, BTCUSD) and Tier 3 (EURUSD, GBPUSD, USDCAD).
+        Fault-tolerant: if any individual symbol is closed/unavailable on the connected MT5 broker,
+        it is skipped cleanly without interrupting Gold or other active pairs.
         """
         candidates: list[CandidateSetup] = []
         gold_open_count = sum(1 for p in open_positions if p.symbol == "XAUUSD")
@@ -212,15 +215,18 @@ class GoldFirstScanner:
             if prof.canonical == "XAUUSD" and gold_open_count >= self.settings.max_gold_positions:
                 continue
 
-            q = broker.get_quote(prof.canonical)
-            m5 = broker.get_bars(prof.canonical, "M5", 260)
-            h1 = broker.get_bars(prof.canonical, "H1", 120)
-            setup = self.evaluate_symbol(prof, m5, h1, q.spread_points, now_utc=now_utc)
+            try:
+                q = broker.get_quote(prof.canonical)
+                m5 = broker.get_bars(prof.canonical, "M5", 260)
+                h1 = broker.get_bars(prof.canonical, "H1", 120)
+            except Exception as exc:
+                logger.warning("Skipping %s during scan (symbol unavailable/closed): %s", prof.canonical, exc)
+                continue
+
+            norm_spread_pts = prof.canonical_spread_points(q.spread_price)
+            setup = self.evaluate_symbol(prof, m5, h1, norm_spread_pts, now_utc=now_utc)
             if setup is not None:
                 candidates.append(setup)
-                # Gold-First short-circuit: if Gold has a clean high-score setup, prioritize it!
-                if prof.canonical == "XAUUSD" and setup.quant_score >= 75.0:
-                    break
 
         candidates.sort(key=lambda c: (c.tier, -c.quant_score))
         return candidates

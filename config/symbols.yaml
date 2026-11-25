@@ -6,13 +6,13 @@
 priority_tiers:
   tier_1_primary:
     - canonical: "XAUUSD"
-      aliases: ["XAUUSD", "XAUUSDm", "XAUUSD.pro", "XAUUSD.raw", "GOLD", "GOLDm", "XAUUSD.a"]
+      aliases: ["XAUUSD", "XAUUSD.m", "XAUUSDm", "XAUUSD.std", "XAUUSD.pro", "XAUUSD.raw", "XAUUSD.ecn", "GOLD", "GOLD.m", "GOLDm", "XAUUSD.a"]
       asset_class: "metal"
       usd_direction_sign: -1   # Long XAUUSD = Short USD (-1)
       contract_size: 100.0     # 1 standard lot = 100 troy oz
       point: 0.01
       pip_size: 0.10           # $0.10 = 1 pip on Gold
-      max_spread_points: 35    # Reject scalp if spread > $0.35 (3.5 pips)
+      max_spread_points: 40    # Reject scalp if spread > $0.40 (4.0 pips)
       max_spread_to_sl_ratio: 0.12
       prime_sessions_utc:
         - [7, 11]              # London Open & Morning
@@ -20,46 +20,34 @@ priority_tiers:
 
   tier_2_high_beta:
     - canonical: "NAS100"
-      aliases: ["NAS100", "US100", "USTEC", "USTECm", "NAS100.cash", "US100.cash", "NDX100"]
+      aliases: ["NAS100", "US100.std", "US100.m", "US100", "USTEC", "USTEC.m", "USTECm", "USTEC.std", "NAS100.m", "NAS100.std", "NAS100.cash", "US100.cash", "NDX100", "NDX", "UT100"]
       asset_class: "index"
       usd_direction_sign: 0    # Equity risk beta (non-FX direct USD pair)
       contract_size: 1.0
       point: 0.01
       pip_size: 1.0            # 1 index point
-      max_spread_points: 220   # 2.2 index points max spread
+      max_spread_points: 250   # 2.5 index points max spread
       max_spread_to_sl_ratio: 0.12
       prime_sessions_utc:
         - [13, 20]             # NY Pre-Market, Cash Open & Afternoon
 
     - canonical: "BTCUSD"
-      aliases: ["BTCUSD", "BTCUSDm", "BTCUSDT", "BTCUSD.pro", "BITCOIN"]
+      aliases: ["BTCUSD", "BTCUSD.m", "BTCUSDm", "BTCUSD.std", "BTCUSDT", "BTCUSD.pro", "BTCUSD.a", "BITCOIN"]
       asset_class: "crypto"
       usd_direction_sign: -1   # Long BTCUSD = Short USD (-1)
       contract_size: 1.0
       point: 0.01
       pip_size: 1.0
-      max_spread_points: 3500  # $35 max spread on BTC CFD
+      max_spread_points: 6500  # $65 max spread on retail BTC CFD (additionally gated by 14% spread-to-SL cap)
       max_spread_to_sl_ratio: 0.14
       prime_sessions_utc:
         - [0, 24]              # 24/7 (especially valuable when Gold/FX are quiet or closed)
 
   tier_3_fx_majors:
     - canonical: "EURUSD"
-      aliases: ["EURUSD", "EURUSDm", "EURUSD.pro", "EURUSD.raw", "EURUSD.a"]
+      aliases: ["EURUSD", "EURUSD.m", "EURUSDm", "EURUSD.std", "EURUSD.pro", "EURUSD.raw", "EURUSD.ecn", "EURUSD.a"]
       asset_class: "forex"
       usd_direction_sign: -1   # Long EURUSD = Short USD (-1)
-      contract_size: 100000.0
-      point: 0.00001
-      pip_size: 0.0001
-      max_spread_points: 15    # 1.5 pips max spread
-      max_spread_to_sl_ratio: 0.12
-      prime_sessions_utc:
-        - [7, 16]              # London + NY Overlap
-
-    - canonical: "GBPUSD"
-      aliases: ["GBPUSD", "GBPUSDm", "GBPUSD.pro", "GBPUSD.raw", "GBPUSD.a"]
-      asset_class: "forex"
-      usd_direction_sign: -1   # Long GBPUSD = Short USD (-1)
       contract_size: 100000.0
       point: 0.00001
       pip_size: 0.0001
@@ -68,14 +56,26 @@ priority_tiers:
       prime_sessions_utc:
         - [7, 16]              # London + NY Overlap
 
+    - canonical: "GBPUSD"
+      aliases: ["GBPUSD", "GBPUSD.m", "GBPUSDm", "GBPUSD.std", "GBPUSD.pro", "GBPUSD.raw", "GBPUSD.ecn", "GBPUSD.a"]
+      asset_class: "forex"
+      usd_direction_sign: -1   # Long GBPUSD = Short USD (-1)
+      contract_size: 100000.0
+      point: 0.00001
+      pip_size: 0.0001
+      max_spread_points: 20    # 2.0 pips max spread
+      max_spread_to_sl_ratio: 0.12
+      prime_sessions_utc:
+        - [7, 16]              # London + NY Overlap
+
     - canonical: "USDCAD"
-      aliases: ["USDCAD", "USDCADm", "USDCAD.pro", "USDCAD.raw", "USDCAD.a"]
+      aliases: ["USDCAD", "USDCAD.m", "USDCADm", "USDCAD.std", "USDCAD.pro", "USDCAD.raw", "USDCAD.ecn", "USDCAD.a"]
       asset_class: "forex"
       usd_direction_sign: 1    # Long USDCAD = Long USD (+1)
       contract_size: 100000.0
       point: 0.00001
       pip_size: 0.0001
-      max_spread_points: 20    # 2.0 pips max spread
+      max_spread_points: 22    # 2.2 pips max spread
       max_spread_to_sl_ratio: 0.12
       prime_sessions_utc:
         - [12, 17]             # NY & CAD Session

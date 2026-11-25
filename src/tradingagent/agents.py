@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
 import time
@@ -46,11 +47,21 @@ class MultiAgentCommittee:
             async with httpx.AsyncClient(timeout=2.0) as client:
                 resp = await client.get(f"{self.settings.ollama_base_url.rstrip('/')}/api/tags")
                 if resp.status_code == 200:
-                    models = [m.get("name", "") for m in resp.json().get("models", [])]
+                    models = [m.get("name", "") for m in resp.json().get("models", []) if m.get("name")]
                     return True, models
         except Exception:
             pass
         return False, []
+
+    def resolve_ollama_model(self, installed_models: list[str]) -> str:
+        """Picks configured deep model if installed, otherwise quick model (e.g. qwen3:4b), else first installed."""
+        if not installed_models:
+            return self.settings.ollama_deep_model
+        if self.settings.ollama_deep_model in installed_models:
+            return self.settings.ollama_deep_model
+        if self.settings.ollama_quick_model in installed_models:
+            return self.settings.ollama_quick_model
+        return installed_models[0]
 
     def _build_heuristic_opinions(self, setup: CandidateSetup) -> list[SpecialistOpinion]:
         """Deterministic baseline specialist analysis (always runs first so numbers are never hallucinated)."""
@@ -144,6 +155,7 @@ class MultiAgentCommittee:
         setup: CandidateSetup,
         opinions: list[SpecialistOpinion],
         lessons: list[str],
+        model_name: str,
     ) -> dict | None:
         prompt = {
             "symbol": setup.symbol,
@@ -169,7 +181,7 @@ class MultiAgentCommittee:
             "Remember: NO_TRADE is preferred if Adversarial_Trap_Critic issued a VETO or grade is below A."
         )
         payload = {
-            "model": self.settings.ollama_deep_model,
+            "model": model_name,
             "messages": [
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": json.dumps(prompt)},
@@ -187,47 +199,14 @@ class MultiAgentCommittee:
             content = resp.json().get("message", {}).get("content", "{}")
             return json.loads(content)
 
-    async def evaluate_candidate(self, setup: CandidateSetup) -> CommitteeDecision:
-        t0 = time.perf_counter()
-        opinions = self._build_heuristic_opinions(setup)
-        lessons = self.memory.get_lessons_for_symbol(setup.symbol, limit=4)
-
-        ollama_online, installed_models = await self.check_ollama_health()
-        if ollama_online and installed_models:
-            try:
-                raw = await self._call_ollama_head_trader(setup, opinions, lessons)
-                if raw:
-                    act_str = str(raw.get("action", "REVIEW")).upper()
-                    action = AgentAction(act_str) if act_str in AgentAction.__members__ else AgentAction.REVIEW
-                    grade_str = str(raw.get("grade", "SKIP")).upper()
-                    grade_map = {"A+": SetupGrade.A_PLUS, "A": SetupGrade.A, "B": SetupGrade.B, "SKIP": SetupGrade.SKIP}
-                    grade = grade_map.get(grade_str, SetupGrade.SKIP)
-                    conf = float(min(1.0, max(0.0, float(raw.get("confidence", 0.5)))))
-                    summary = str(raw.get("thesis_summary", "Ollama Head Trader synthesis completed."))
-
-                    # Enforce consistency: never allow LONG setup to flip to SHORT without scanner trigger
-                    if action == AgentAction.EXECUTE_LONG and setup.side != Side.LONG:
-                        action = AgentAction.NO_TRADE
-                    if action == AgentAction.EXECUTE_SHORT and setup.side != Side.SHORT:
-                        action = AgentAction.NO_TRADE
-
-                    return CommitteeDecision(
-                        setup_id=setup.setup_id,
-                        timestamp=datetime.now(timezone.utc),
-                        symbol=setup.symbol,
-                        action=action,
-                        grade=grade,
-                        confidence=round(conf, 2),
-                        llm_mode_used=f"ollama:{self.settings.ollama_deep_model}",
-                        latency_ms=round((time.perf_counter() - t0) * 1000.0, 2),
-                        opinions=opinions,
-                        thesis_summary=summary,
-                        lessons_injected=len(lessons),
-                    )
-            except Exception:
-                pass
-
-        # Zero-Fee Deterministic Institutional Rubric (used when Ollama isn't started yet or during fast backtests)
+    def _evaluate_deterministic(
+        self,
+        setup: CandidateSetup,
+        opinions: list[SpecialistOpinion],
+        lessons: list[str],
+        t0: float,
+    ) -> CommitteeDecision:
+        """Zero-Fee Deterministic Institutional Rubric (used when Ollama isn't running or during fast backtests)."""
         has_veto = any(op.stance == "VETO" for op in opinions)
         avg_conf = sum(op.confidence for op in opinions[:2]) / 2.0
 
@@ -259,5 +238,60 @@ class MultiAgentCommittee:
             lessons_injected=len(lessons),
         )
 
+    async def evaluate_candidate(self, setup: CandidateSetup) -> CommitteeDecision:
+        t0 = time.perf_counter()
+        opinions = self._build_heuristic_opinions(setup)
+        lessons = self.memory.get_lessons_for_symbol(setup.symbol, limit=4)
+
+        ollama_online, installed_models = await self.check_ollama_health()
+        if ollama_online and installed_models:
+            active_model = self.resolve_ollama_model(installed_models)
+            try:
+                raw = await self._call_ollama_head_trader(setup, opinions, lessons, model_name=active_model)
+                if raw:
+                    act_str = str(raw.get("action", "REVIEW")).upper()
+                    action = AgentAction(act_str) if act_str in AgentAction.__members__ else AgentAction.REVIEW
+                    grade_str = str(raw.get("grade", "SKIP")).upper()
+                    grade_map = {"A+": SetupGrade.A_PLUS, "A": SetupGrade.A, "B": SetupGrade.B, "SKIP": SetupGrade.SKIP}
+                    grade = grade_map.get(grade_str, SetupGrade.SKIP)
+                    conf = float(min(1.0, max(0.0, float(raw.get("confidence", 0.5)))))
+                    summary = str(raw.get("thesis_summary", "Ollama Head Trader synthesis completed."))
+
+                    # Enforce consistency: never allow LONG setup to flip to SHORT without scanner trigger
+                    if action == AgentAction.EXECUTE_LONG and setup.side != Side.LONG:
+                        action = AgentAction.NO_TRADE
+                    if action == AgentAction.EXECUTE_SHORT and setup.side != Side.SHORT:
+                        action = AgentAction.NO_TRADE
+
+                    return CommitteeDecision(
+                        setup_id=setup.setup_id,
+                        timestamp=datetime.now(timezone.utc),
+                        symbol=setup.symbol,
+                        action=action,
+                        grade=grade,
+                        confidence=round(conf, 2),
+                        llm_mode_used=f"ollama:{active_model}",
+                        latency_ms=round((time.perf_counter() - t0) * 1000.0, 2),
+                        opinions=opinions,
+                        thesis_summary=summary,
+                        lessons_injected=len(lessons),
+                    )
+            except Exception:
+                pass
+
+        return self._evaluate_deterministic(setup, opinions, lessons, t0)
+
     def evaluate_candidate_sync(self, setup: CandidateSetup) -> CommitteeDecision:
-        return asyncio.run(self.evaluate_candidate(setup))
+        """Safe synchronous entrypoint that works both from CLI and inside FastAPI's running event loop."""
+        if not self.settings.llm_enabled or self.settings.llm_provider == "heuristic":
+            t0 = time.perf_counter()
+            opinions = self._build_heuristic_opinions(setup)
+            lessons = self.memory.get_lessons_for_symbol(setup.symbol, limit=4)
+            return self._evaluate_deterministic(setup, opinions, lessons, t0)
+
+        try:
+            asyncio.get_running_loop()
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(lambda: asyncio.run(self.evaluate_candidate(setup))).result()
+        except RuntimeError:
+            return asyncio.run(self.evaluate_candidate(setup))

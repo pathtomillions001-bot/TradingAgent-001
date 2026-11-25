@@ -28,6 +28,7 @@ def doctor() -> None:
     settings = AppSettings()
     engine = TradingAgentEngine(settings=settings)
     ollama_ok, models = asyncio.run(engine.committee.check_ollama_health())
+    active_model = engine.committee.resolve_ollama_model(models)
     acct = engine.broker.get_account_snapshot()
 
     table = Table(title="TradingAgent-001 Local Diagnostics (Windows 10 / 16GB RAM Profile)")
@@ -49,9 +50,9 @@ def doctor() -> None:
         "Zero-Fee Brain (Ollama)",
         "ONLINE" if ollama_ok else "FALLBACK READY",
         (
-            f"Connected ({settings.ollama_base_url}) | Models: {', '.join(models) or 'none pulled yet'}"
+            f"Connected ({settings.ollama_base_url}) | Active: {active_model} | Installed: {', '.join(models) or 'none'}"
             if ollama_ok
-            else f"Ollama not running yet — using Deterministic Multi-Agent Rubric (run `ollama pull {settings.ollama_deep_model}`)"
+            else f"Ollama not running yet — using Deterministic Multi-Agent Rubric (run `ollama pull {settings.ollama_quick_model}`)"
         ),
     )
     table.add_row(

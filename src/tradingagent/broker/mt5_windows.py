@@ -197,6 +197,19 @@ class MT5WindowsAdapter(BrokerAdapter):
             )
         return result
 
+    def _normalize_price(self, broker_sym: str, price: float) -> float:
+        """Aligns price/SL/TP to broker symbol digits and trade_tick_size so MT5 order_check never rejects rounding."""
+        mt5 = self._import_mt5()
+        info = mt5.symbol_info(broker_sym)
+        if info is None or price <= 0:
+            return round(float(price), 5)
+        tick_size = float(info.trade_tick_size) if info.trade_tick_size > 0 else float(info.point)
+        digits = int(info.digits)
+        if tick_size > 0:
+            snapped = round(float(price) / tick_size) * tick_size
+            return round(snapped, digits)
+        return round(float(price), digits)
+
     def _resolve_filling_mode(self, broker_sym: str) -> int:
         mt5 = self._import_mt5()
         info = mt5.symbol_info(broker_sym)
@@ -236,7 +249,9 @@ class MT5WindowsAdapter(BrokerAdapter):
         broker_sym = self.mapper.to_broker(canonical_symbol)
         quote = self.get_quote(canonical_symbol)
         order_type = mt5.ORDER_TYPE_BUY if side == Side.LONG else mt5.ORDER_TYPE_SELL
-        price = quote.ask if side == Side.LONG else quote.bid
+        price = self._normalize_price(broker_sym, quote.ask if side == Side.LONG else quote.bid)
+        norm_sl = self._normalize_price(broker_sym, sl)
+        norm_tp = self._normalize_price(broker_sym, tp)
 
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
@@ -244,8 +259,8 @@ class MT5WindowsAdapter(BrokerAdapter):
             "volume": float(volume),
             "type": order_type,
             "price": float(price),
-            "sl": float(sl),
-            "tp": float(tp),
+            "sl": float(norm_sl),
+            "tp": float(norm_tp),
             "deviation": 20,
             "magic": int(self.settings.mt5_magic_number),
             "comment": comment[:31],
@@ -264,8 +279,8 @@ class MT5WindowsAdapter(BrokerAdapter):
                 side=side,
                 volume=volume,
                 fill_price=price,
-                sl=sl,
-                tp=tp,
+                sl=norm_sl,
+                tp=norm_tp,
                 message=f"MT5 order_check rejected (retcode={code}): {cmt}",
             )
 
@@ -279,8 +294,8 @@ class MT5WindowsAdapter(BrokerAdapter):
                 side=side,
                 volume=volume,
                 fill_price=price,
-                sl=sl,
-                tp=tp,
+                sl=norm_sl,
+                tp=norm_tp,
                 message=f"MT5 order_send failed (retcode={code}): {cmt}",
             )
 
@@ -291,8 +306,8 @@ class MT5WindowsAdapter(BrokerAdapter):
             side=side,
             volume=float(res.volume),
             fill_price=float(res.price),
-            sl=sl,
-            tp=tp,
+            sl=norm_sl,
+            tp=norm_tp,
             message="MT5_FILLED",
         )
 
@@ -302,12 +317,13 @@ class MT5WindowsAdapter(BrokerAdapter):
         if not pos_list:
             return False
         pos = pos_list[0]
+        broker_sym = str(pos.symbol)
         request = {
             "action": mt5.TRADE_ACTION_SLTP,
             "position": int(ticket),
-            "symbol": str(pos.symbol),
-            "sl": float(new_sl),
-            "tp": float(new_tp),
+            "symbol": broker_sym,
+            "sl": self._normalize_price(broker_sym, new_sl),
+            "tp": self._normalize_price(broker_sym, new_tp),
             "magic": int(self.settings.mt5_magic_number),
         }
         res = mt5.order_send(request)
