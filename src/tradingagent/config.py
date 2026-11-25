@@ -88,6 +88,7 @@ class AppSettings(BaseSettings):
     # Deterministic Risk Firewall limits
     risk_per_trade_pct: float = 0.75
     max_min_lot_risk_pct: float = 1.25
+    gold_min_lot_max_risk_pct: float = 3.25
     max_daily_loss_pct: float = 2.50
     max_total_drawdown_pct: float = 6.00
     max_open_positions: int = 2
@@ -101,9 +102,11 @@ class AppSettings(BaseSettings):
     duckdb_path: Path = ROOT_DIR / "data" / "catalog" / "market_data.duckdb"
     symbols_config_path: Path = ROOT_DIR / "config" / "symbols.yaml"
 
-    # Dashboard
+    # Dashboard & Built-In Autonomous Loop
     dashboard_host: str = "0.0.0.0"
     dashboard_port: int = 8000
+    autopilot_enabled: bool = False
+    autopilot_interval_seconds: int = 15
 
 
 def load_symbol_profiles(config_path: Path | None = None) -> dict[str, SymbolProfile]:

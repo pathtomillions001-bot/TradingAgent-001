@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -15,6 +18,7 @@ from tradingagent.broker.paper_mt5 import DEFAULT_PRICES, PaperMT5Adapter
 from tradingagent.config import AppSettings
 from tradingagent.engine import TradingAgentEngine
 
+logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
@@ -24,11 +28,51 @@ class BacktestRequest(BaseModel):
     starting_equity: float = 10000.0
 
 
+class AutopilotToggleRequest(BaseModel):
+    enabled: bool
+
+
 def create_app(settings: AppSettings | None = None) -> FastAPI:
+    engine = TradingAgentEngine(settings=settings)
+    scan_lock = asyncio.Lock()
+
+    @asynccontextmanager
+    async def lifespan(app_inst: FastAPI) -> AsyncIterator[None]:
+        stop_evt = asyncio.Event()
+
+        async def _autopilot_worker() -> None:
+            while not stop_evt.is_set():
+                try:
+                    if app_inst.state.autopilot_enabled and not engine.risk.kill_switch_active:
+                        async with scan_lock:
+                            await engine.run_single_cycle(auto_execute=True)
+                        app_inst.state.autopilot_cycles += 1
+                        app_inst.state.autopilot_last_run = datetime.now(timezone.utc).isoformat()
+                except Exception as exc:
+                    logger.warning("Autopilot background cycle warning: %s", exc)
+
+                interval = max(3, int(engine.settings.autopilot_interval_seconds))
+                try:
+                    await asyncio.wait_for(stop_evt.wait(), timeout=float(interval))
+                except asyncio.TimeoutError:
+                    pass
+
+        worker_task = asyncio.create_task(_autopilot_worker())
+        try:
+            yield
+        finally:
+            stop_evt.set()
+            worker_task.cancel()
+            try:
+                await worker_task
+            except asyncio.CancelledError:
+                pass
+
     app = FastAPI(
         title="TradingAgent-001 Local Control Center",
         version="0.1.0",
         description="100% Zero-Fee Local Windows 10 + MT5 Multi-Agent Scalping & Intraday Engine",
+        lifespan=lifespan,
     )
 
     app.add_middleware(
@@ -39,8 +83,10 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    engine = TradingAgentEngine(settings=settings)
     app.state.engine = engine
+    app.state.autopilot_enabled = bool(engine.settings.autopilot_enabled)
+    app.state.autopilot_cycles = 0
+    app.state.autopilot_last_run = None
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:
@@ -62,6 +108,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             try:
                 q = engine.broker.get_quote(prof.canonical)
                 norm_spread = round(prof.canonical_spread_points(q.spread_price), 1)
+                unit_info = engine.risk.compute_contract_unit_telemetry(prof, q)
                 watchlist.append({
                     "symbol": prof.canonical,
                     "broker_symbol": q.broker_symbol,
@@ -73,6 +120,9 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
                     "spread_points": norm_spread,
                     "max_spread_points": prof.max_spread_points,
                     "spread_ok": norm_spread <= prof.max_spread_points,
+                    "min_lot": unit_info["min_lot"],
+                    "unit_label": unit_info["unit_label"],
+                    "min_lot_cap_pct": engine.risk.effective_min_lot_risk_cap_pct(prof.canonical),
                 })
             except Exception as exc:
                 watchlist.append({
@@ -86,6 +136,9 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
                     "spread_points": 0.0,
                     "max_spread_points": prof.max_spread_points,
                     "spread_ok": False,
+                    "min_lot": 0.01,
+                    "unit_label": "—",
+                    "min_lot_cap_pct": engine.risk.effective_min_lot_risk_cap_pct(prof.canonical),
                     "error": str(exc),
                 })
 
@@ -94,6 +147,12 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
         return {
             "trading_mode": engine.settings.trading_mode,
             "kill_switch_active": engine.risk.kill_switch_active,
+            "autopilot": {
+                "enabled": bool(app.state.autopilot_enabled),
+                "interval_seconds": engine.settings.autopilot_interval_seconds,
+                "cycles_completed": app.state.autopilot_cycles,
+                "last_run": app.state.autopilot_last_run,
+            },
             "ollama": {
                 "online": ollama_ok,
                 "configured_quick_model": engine.settings.ollama_quick_model,
@@ -108,6 +167,8 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             },
             "risk_limits": {
                 "risk_per_trade_pct": engine.settings.risk_per_trade_pct,
+                "max_min_lot_risk_pct": engine.settings.max_min_lot_risk_pct,
+                "gold_min_lot_max_risk_pct": engine.settings.gold_min_lot_max_risk_pct,
                 "max_daily_loss_pct": engine.settings.max_daily_loss_pct,
                 "max_total_drawdown_pct": engine.settings.max_total_drawdown_pct,
                 "max_net_usd_risk_pct": engine.settings.max_net_usd_risk_pct,
@@ -124,7 +185,17 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.post("/api/scan")
     async def trigger_scan_cycle(auto_execute: bool = True) -> dict[str, Any]:
-        return await engine.run_single_cycle(auto_execute=auto_execute)
+        async with scan_lock:
+            return await engine.run_single_cycle(auto_execute=auto_execute)
+
+    @app.post("/api/autopilot")
+    async def toggle_autopilot(req: AutopilotToggleRequest) -> dict[str, Any]:
+        app.state.autopilot_enabled = bool(req.enabled)
+        return {
+            "enabled": app.state.autopilot_enabled,
+            "interval_seconds": engine.settings.autopilot_interval_seconds,
+            "cycles_completed": app.state.autopilot_cycles,
+        }
 
     @app.post("/api/kill-switch")
     async def activate_kill_switch() -> dict[str, Any]:

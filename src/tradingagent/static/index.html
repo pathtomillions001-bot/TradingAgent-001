@@ -204,6 +204,7 @@
         </div>
       </div>
       <div class="controls">
+        <button id="autopilotBtn" onclick="toggleAutopilot()">🤖 Autopilot: OFF</button>
         <button class="btn-gold" onclick="runScanCycle(true)">⚡ Scan &amp; Execute Cycle</button>
         <button onclick="runScanCycle(false)">🔍 Dry-Run Scan Only</button>
         <button class="btn-danger" id="killBtn" onclick="toggleKillSwitch()">🛑 Emergency Kill Switch</button>
@@ -248,6 +249,7 @@
               <th>Symbol</th>
               <th>Bid</th>
               <th>Ask</th>
+              <th>Contract Unit</th>
               <th>Live Spread</th>
               <th>Gate</th>
             </tr>
@@ -310,6 +312,7 @@
 
   <script>
     let currentKillSwitch = false;
+    let currentAutopilot = false;
 
     function showToast(msg) {
       const el = document.getElementById('toast');
@@ -331,6 +334,16 @@
         modeBadge.textContent = currentKillSwitch ? 'HALTED (KILL SWITCH)' : data.trading_mode.toUpperCase();
         modeBadge.className = 'badge ' + (currentKillSwitch ? 'badge-red' : 'badge-green');
 
+        if (data.autopilot) {
+          currentAutopilot = data.autopilot.enabled;
+          const apBtn = document.getElementById('autopilotBtn');
+          apBtn.textContent = currentAutopilot
+            ? `🤖 Autopilot (${data.autopilot.interval_seconds}s): ON`
+            : `⏸ Autopilot (${data.autopilot.interval_seconds}s): PAUSED`;
+          apBtn.style.borderColor = currentAutopilot ? 'var(--green)' : 'var(--border)';
+          apBtn.style.color = currentAutopilot ? 'var(--green)' : 'var(--text)';
+        }
+
         document.getElementById('killBtn').textContent = currentKillSwitch
           ? '✅ Resume Agent Trading'
           : '🛑 Emergency Kill Switch';
@@ -344,12 +357,12 @@
 
         document.getElementById('kpiDailyDD').textContent = `${data.risk_limits.daily_drawdown_pct.toFixed(2)}%`;
         document.getElementById('kpiDailyCap').textContent =
-          `Hard Daily Lock: ${data.risk_limits.max_daily_loss_pct.toFixed(2)}% | Risk/Trade: ${data.risk_limits.risk_per_trade_pct}%`;
+          `Daily Lock: ${data.risk_limits.max_daily_loss_pct.toFixed(2)}% | Risk: ${data.risk_limits.risk_per_trade_pct}% (Gold 0.01≤${data.risk_limits.gold_min_lot_max_risk_pct.toFixed(2)}%)`;
 
         const usdRisk = data.risk_limits.current_net_usd_risk_pct;
         document.getElementById('kpiUsdRisk').textContent = `${usdRisk >= 0 ? '+' : ''}${usdRisk.toFixed(2)}%`;
         document.getElementById('kpiUsdCap').textContent =
-          `Max Correlated USD Cap: ±${data.risk_limits.max_net_usd_risk_pct.toFixed(2)}%`;
+          `Correlated USD Cap: ±${data.risk_limits.max_net_usd_risk_pct.toFixed(2)}% (Solo Gold BE Lock)`;
 
         document.getElementById('kpiOpenCount').textContent = data.open_positions.length;
 
@@ -367,6 +380,7 @@
                 <td>—</td>
                 <td>—</td>
                 <td>—</td>
+                <td>—</td>
                 <td><span class="badge badge-red">OFFLINE</span></td>
               </tr>
             `;
@@ -377,6 +391,7 @@
               <td style="font-weight:700; color:${w.symbol === 'XAUUSD' ? 'var(--gold)' : 'var(--text)'}">${w.symbol}${brokerSub}</td>
               <td>${w.bid}</td>
               <td>${w.ask}</td>
+              <td style="font-size:0.76rem; color:var(--muted);">${w.unit_label || '—'}</td>
               <td>${w.spread_points} / ${w.max_spread_points} pts</td>
               <td><span class="badge ${w.spread_ok ? 'badge-green' : 'badge-red'}">${w.spread_ok ? 'READY' : 'WIDE'}</span></td>
             </tr>
@@ -462,6 +477,19 @@
         showToast(`Cycle finished: ${out.candidates_found} candidate setup(s) evaluated.`);
       } catch (err) {
         showToast(`Scan error: ${err.message}`);
+      }
+      await fetchStatus();
+    }
+
+    async function toggleAutopilot() {
+      const nextState = !currentAutopilot;
+      const res = await fetch('/api/autopilot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: nextState })
+      });
+      if (res.ok) {
+        showToast(nextState ? '15s Gold-First Autopilot ENABLED.' : 'Autopilot PAUSED (manual scan still active).');
       }
       await fetchStatus();
     }

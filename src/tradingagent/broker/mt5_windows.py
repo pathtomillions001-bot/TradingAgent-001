@@ -176,22 +176,41 @@ class MT5WindowsAdapter(BrokerAdapter):
         for p in positions:
             if int(p.magic) != int(self.settings.mt5_magic_number):
                 continue
-            canonical = self.mapper.to_canonical(str(p.symbol))
+            broker_sym = str(p.symbol)
+            canonical = self.mapper.to_canonical(broker_sym)
             side = Side.LONG if int(p.type) == mt5.ORDER_TYPE_BUY else Side.SHORT
+            entry_p = float(p.price_open)
+            sl_p = float(p.sl)
+            vol = float(p.volume)
+
+            # Detect if SL has already been shifted to Break-Even or better on MT5 server
+            is_be = (sl_p >= entry_p and sl_p > 0) if side == Side.LONG else (0 < sl_p <= entry_p)
+
+            # Compute exact remaining initial USD risk from broker symbol_info when not yet at BE
+            live_risk_usd = 0.0
+            if not is_be and sl_p > 0:
+                info = mt5.symbol_info(broker_sym)
+                if info is not None and float(info.point) > 0:
+                    pt = float(info.point)
+                    tsize = float(info.trade_tick_size) if float(info.trade_tick_size) > 0 else pt
+                    tval = float(info.trade_tick_value) * (pt / tsize)
+                    live_risk_usd = round((abs(entry_p - sl_p) / pt) * tval * vol, 2)
+
             result.append(
                 OpenPosition(
                     ticket=int(p.ticket),
                     symbol=canonical,
-                    broker_symbol=str(p.symbol),
+                    broker_symbol=broker_sym,
                     side=side,
-                    volume=float(p.volume),
-                    entry_price=float(p.price_open),
+                    volume=vol,
+                    entry_price=entry_p,
                     current_price=float(p.price_current),
-                    sl=float(p.sl),
+                    sl=sl_p,
                     tp=float(p.tp),
-                    initial_risk_usd=0.0,
+                    initial_risk_usd=live_risk_usd,
                     unrealized_pnl=float(p.profit),
                     opened_at=datetime.fromtimestamp(int(p.time), tz=timezone.utc),
+                    be_moved=is_be,
                     magic=int(p.magic),
                 )
             )

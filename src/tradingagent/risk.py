@@ -71,6 +71,30 @@ class DeterministicRiskFirewall:
             net_usd_pct += prof.usd_direction_sign * side_sign * pos_risk_pct
         return round(net_usd_pct, 4)
 
+    def effective_min_lot_risk_cap_pct(self, symbol: str) -> float:
+        """
+        Tier-1 Gold (XAUUSD) has a larger contract notional (100 oz -> $1/pt on 0.01 lot) than FX micro-lots.
+        Allows 0.01 min lot on XAUUSD up to gold_min_lot_max_risk_pct while keeping FX/secondary pairs tight.
+        """
+        if symbol.upper() == "XAUUSD":
+            return max(self.settings.max_min_lot_risk_pct, self.settings.gold_min_lot_max_risk_pct)
+        return self.settings.max_min_lot_risk_pct
+
+    def compute_contract_unit_telemetry(self, prof: SymbolProfile, quote: QuoteTick) -> dict[str, float | str]:
+        """Returns live broker-authoritative $/pip (or $/pt) at 0.01 min lot and 1.00 full lot."""
+        if quote.point <= 0 or quote.tick_value <= 0:
+            return {"min_lot": quote.volume_min, "usd_per_pip_min_lot": 0.0, "unit_label": "—"}
+        pips_in_points = prof.pip_size / quote.point
+        usd_per_pip_1lot = pips_in_points * quote.tick_value
+        usd_per_pip_min_lot = round(usd_per_pip_1lot * quote.volume_min, 3)
+        unit_name = "pip" if prof.asset_class in ("forex", "metal") else "pt"
+        return {
+            "min_lot": quote.volume_min,
+            "usd_per_pip_min_lot": usd_per_pip_min_lot,
+            "usd_per_pip_1lot": round(usd_per_pip_1lot, 2),
+            "unit_label": f"${usd_per_pip_min_lot:.2f}/{unit_name} @{quote.volume_min:.2f}",
+        }
+
     def calculate_exact_lots(
         self,
         equity: float,
@@ -80,7 +104,8 @@ class DeterministicRiskFirewall:
     ) -> tuple[float, float]:
         """
         Returns (rounded_lots, exact_risk_usd).
-        Uses broker's authoritative point & tick_value (value per 1 point move per 1.0 lot).
+        Uses broker's authoritative point & tick_value (value per 1 point move per 1.0 lot),
+        automatically adapting lot sizes to each asset's contract specification (e.g. XAUUSD vs EURUSD vs NAS100).
         """
         if equity <= 0 or risk_pct <= 0 or sl_distance_price <= 0 or quote.point <= 0 or quote.tick_value <= 0:
             return 0.0, 0.0
@@ -101,8 +126,9 @@ class DeterministicRiskFirewall:
         if lots < quote.volume_min:
             min_lot_risk_usd = round(quote.volume_min * loss_per_one_lot, 2)
             min_lot_risk_pct = (min_lot_risk_usd / equity) * 100.0
-            # Micro-account guard: allow broker minimum lot (0.01) ONLY if its exact risk <= max_min_lot_risk_pct
-            if min_lot_risk_pct <= self.settings.max_min_lot_risk_pct:
+            cap_pct = self.effective_min_lot_risk_cap_pct(quote.symbol)
+            # Allow broker minimum lot (0.01) ONLY if its exact dollar risk <= symbol's min-lot cap
+            if min_lot_risk_pct <= cap_pct:
                 return round(quote.volume_min, decimals), min_lot_risk_usd
             return 0.0, min_lot_risk_usd
 
@@ -207,11 +233,12 @@ class DeterministicRiskFirewall:
             sl_distance_price=sl_dist,
             quote=quote,
         )
+        sym_min_cap = self.effective_min_lot_risk_cap_pct(setup.symbol)
         if lots <= 0:
             min_pct = (actual_risk_usd / account.equity * 100.0) if account.equity > 0 else 0.0
             rejections.append(
                 f"LOT_SIZE_BELOW_MIN: Min lot {quote.volume_min:.2f} risks ${actual_risk_usd:.2f} "
-                f"({min_pct:.2f}% > {self.settings.max_min_lot_risk_pct:.2f}% cap)."
+                f"({min_pct:.2f}% > {sym_min_cap:.2f}% cap)."
             )
             actual_risk_usd = 0.0
         else:
@@ -220,17 +247,32 @@ class DeterministicRiskFirewall:
         actual_risk_pct = (actual_risk_usd / account.equity * 100.0) if account.equity > 0 else 0.0
 
         # 8. Net USD Directional Correlation Guard
+        # When Tier-1 Gold uses its standalone 0.01 min-lot allowance with zero existing USD exposure on the book,
+        # permit it up to gold_min_lot_max_risk_pct — and automatically lock out stacking additional same-direction
+        # USD pairs (EURUSD/GBPUSD/USDCAD/BTCUSD) until Gold shifts SL to Break-Even (+1.0R)!
         current_net_usd = self.compute_open_net_usd_risk_pct(open_positions, account.equity)
         side_sign = 1 if setup.side == Side.LONG else -1
         trade_usd_contrib = prof.usd_direction_sign * side_sign * actual_risk_pct
         projected_net_usd = round(current_net_usd + trade_usd_contrib, 4)
 
-        if prof.usd_direction_sign != 0 and abs(projected_net_usd) > self.settings.max_net_usd_risk_pct:
+        is_gold_solo_min_lot = (
+            setup.symbol == "XAUUSD"
+            and lots > 0
+            and abs(lots - quote.volume_min) < 1e-6
+            and abs(current_net_usd) < 1e-4
+        )
+        effective_usd_cap = (
+            max(self.settings.max_net_usd_risk_pct, self.settings.gold_min_lot_max_risk_pct)
+            if is_gold_solo_min_lot
+            else self.settings.max_net_usd_risk_pct
+        )
+
+        if prof.usd_direction_sign != 0 and abs(projected_net_usd) > effective_usd_cap:
             rejections.append(
-                f"USD_CORRELATION_CAP: Projected net USD directional risk {abs(projected_net_usd):.2f}% > {self.settings.max_net_usd_risk_pct:.2f}% cap"
+                f"USD_CORRELATION_CAP: Projected net USD directional risk {abs(projected_net_usd):.2f}% > {effective_usd_cap:.2f}% cap"
             )
         else:
-            passed.append(f"Net USD exposure {projected_net_usd:+.2f}% within ±{self.settings.max_net_usd_risk_pct:.2f}% cap")
+            passed.append(f"Net USD exposure {projected_net_usd:+.2f}% within ±{effective_usd_cap:.2f}% cap")
 
         # 9. Free Margin Check (with 150% safety buffer)
         required_margin = (fill_price * prof.contract_size * lots) / max(1, account.leverage)

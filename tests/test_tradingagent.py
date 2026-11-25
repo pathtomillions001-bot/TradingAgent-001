@@ -82,15 +82,115 @@ def test_blank_env_fields_and_micro_account_lot_sizing(tmp_path: Path) -> None:
     # Canonical spread must normalize $0.220 -> 22.0 canonical points (not 220!)
     assert round(profiles["XAUUSD"].canonical_spread_points(gold_3digit_quote.spread_price), 1) == 22.0
 
-    # $4.20 SL on 0.01 lot = $4.20 risk = 1.12% of $374.38 (<= 1.25% micro cap -> approved at 0.01 lot)
-    lots_ok, risk_ok = firewall.calculate_exact_lots(374.38, 0.75, 4.20, gold_3digit_quote)
-    assert lots_ok == 0.01
-    assert risk_ok == 4.20
+    # Tier-1 Gold 0.01 min-lot allowance on $360.23 JustMarkets Demo equity:
+    # Exact London session scenario: $6.16 SL on 0.01 lot = $6.16 risk (1.71% <= 3.25% Gold min-lot cap) -> APPROVED!
+    lots_gold_london, risk_gold_london = firewall.calculate_exact_lots(360.23, 0.75, 6.16, gold_3digit_quote)
+    assert lots_gold_london == 0.01
+    assert risk_gold_london == 6.16
 
-    # $7.50 SL on 0.01 lot = $7.50 risk = 2.00% of $374.38 (> 1.25% micro cap -> safely blocked!)
-    lots_blocked, risk_blocked = firewall.calculate_exact_lots(374.38, 0.75, 7.50, gold_3digit_quote)
-    assert lots_blocked == 0.0
-    assert risk_blocked == 7.50
+    # Extreme news spike ($15.00 SL on Gold = 4.16% > 3.25% Gold cap) -> STILL SAFELY BLOCKED!
+    lots_gold_spike, risk_gold_spike = firewall.calculate_exact_lots(360.23, 0.75, 15.00, gold_3digit_quote)
+    assert lots_gold_spike == 0.0
+    assert risk_gold_spike == 15.00
+
+    # Cross-asset contract awareness on the EXACT SAME $360.23 account:
+    # EURUSD 12-pip SL (0.00120) -> $1.20/lot*0.01 = $1.20 per 0.01 lot -> 0.75% target ($2.70) sizes to 0.02 lots ($2.40)!
+    eur_quote = QuoteTick(
+        symbol="EURUSD",
+        broker_symbol="EURUSD.m",
+        timestamp=datetime.now(timezone.utc),
+        bid=1.07200,
+        ask=1.07210,
+        point=0.00001,
+        tick_value=1.00,  # $1 per point on 1.00 standard lot (100,000 EUR) => $10/pip on 1.0 lot, $0.10/pip on 0.01 lot
+        tick_size=0.00001,
+    )
+    lots_eur_small, risk_eur_small = firewall.calculate_exact_lots(360.23, 0.75, 0.00120, eur_quote)
+    assert lots_eur_small == 0.02
+    assert risk_eur_small == 2.40
+
+    # On $10,000 equity (0.75% = $75 risk): EURUSD 12-pip SL = 0.62 lots ($74.40) vs XAUUSD $6.16 SL = 0.12 lots ($73.92)
+    lots_eur_10k, _ = firewall.calculate_exact_lots(10000.0, 0.75, 0.00120, eur_quote)
+    lots_gold_10k, _ = firewall.calculate_exact_lots(10000.0, 0.75, 6.16, gold_3digit_quote)
+    assert lots_eur_10k == 0.62
+    assert lots_gold_10k == 0.12
+
+    # Full validate_and_size check for Solo Gold 0.01 min-lot + automatic USD Correlation Lock until Break-Even!
+    small_acct = AccountSnapshot(
+        equity=360.23, balance=360.23, free_margin=360.23, day_starting_equity=360.23, peak_equity=360.23, leverage=500
+    )
+    gold_short_setup = CandidateSetup(
+        setup_id="TEST-GOLD-MINLOT",
+        timestamp=datetime.now(timezone.utc),
+        symbol="XAUUSD",
+        tier=1,
+        side=Side.SHORT,
+        setup_type=SetupType.VWAP_EMA_PULLBACK,
+        htf_bias="BEARISH",
+        entry_price=2910.000,
+        stop_loss=2916.160,
+        take_profit=2896.380,
+        atr=4.25,
+        adx=27.0,
+        rsi=44.0,
+        vwap_distance_atr=-0.4,
+        spread_points=22.0,
+        spread_to_sl_ratio=0.035,
+        rr_ratio=2.21,
+        quant_score=91.0,
+        session_label="LONDON_SESSION",
+    )
+    gold_res = firewall.validate_and_size(gold_short_setup, small_acct, gold_3digit_quote, [])
+    assert gold_res.approved is True
+    assert gold_res.calculated_lots == 0.01
+    assert gold_res.risk_usd == 6.16
+
+    # While Gold 0.01 SHORT (+1.71% Long USD) is open before Break-Even, stacking EURUSD SHORT (+0.67% Long USD) is LOCKED!
+    open_gold_pos = OpenPosition(
+        ticket=99,
+        symbol="XAUUSD",
+        broker_symbol="XAUUSD.m",
+        side=Side.SHORT,
+        volume=0.01,
+        entry_price=2910.000,
+        current_price=2909.500,
+        sl=2916.160,
+        tp=2896.380,
+        initial_risk_usd=6.16,
+        unrealized_pnl=0.50,
+        opened_at=datetime.now(timezone.utc),
+        be_moved=False,
+    )
+    eur_short_setup = CandidateSetup(
+        setup_id="TEST-EUR-STACK",
+        timestamp=datetime.now(timezone.utc),
+        symbol="EURUSD",
+        tier=3,
+        side=Side.SHORT,
+        setup_type=SetupType.VWAP_EMA_PULLBACK,
+        htf_bias="BEARISH",
+        entry_price=1.07200,
+        stop_loss=1.07320,
+        take_profit=1.06930,
+        atr=0.0008,
+        adx=25.0,
+        rsi=45.0,
+        vwap_distance_atr=-0.3,
+        spread_points=10.0,
+        spread_to_sl_ratio=0.08,
+        rr_ratio=2.25,
+        quant_score=82.0,
+        session_label="LONDON_SESSION",
+    )
+    eur_locked = firewall.validate_and_size(eur_short_setup, small_acct, eur_quote, [open_gold_pos])
+    assert eur_locked.approved is False
+    assert any("USD_CORRELATION_CAP" in r for r in eur_locked.rejection_reasons)
+
+    # Once Gold moves SL to Break-Even (be_moved=True), EURUSD SHORT at 0.02 lots ($2.40 = 0.67%) is UNLOCKED!
+    open_gold_pos.be_moved = True
+    eur_unlocked = firewall.validate_and_size(eur_short_setup, small_acct, eur_quote, [open_gold_pos])
+    assert eur_unlocked.approved is True
+    assert eur_unlocked.calculated_lots == 0.02
 
 
 def test_exact_lot_sizing_and_net_usd_correlation_guard(tmp_path: Path) -> None:
@@ -267,31 +367,42 @@ def test_spread_aware_ablation_backtester_and_api(tmp_path: Path) -> None:
     assert agent_bt.total_trades <= raw_bt.total_trades
 
     app = create_app(settings=settings)
-    client = TestClient(app)
-    r = client.get("/api/status")
-    assert r.status_code == 200
-    assert r.json()["watchlist"][0]["symbol"] == "XAUUSD"
+    with TestClient(app) as client:
+        r = client.get("/api/status")
+        assert r.status_code == 200
+        status_json = r.json()
+        assert status_json["watchlist"][0]["symbol"] == "XAUUSD"
+        assert "unit_label" in status_json["watchlist"][0]
+        assert status_json["autopilot"]["enabled"] is False
 
-    # Regression test: /api/backtest inside running async event loop must succeed (HTTP 200)
-    bt_resp = client.post("/api/backtest", json={"symbol": "XAUUSD", "bars": 600, "starting_equity": 10000})
-    assert bt_resp.status_code == 200
-    assert bt_resp.json()["bars_tested"] == 600
+        # Toggle built-in Autopilot on & off via API
+        ap_on = client.post("/api/autopilot", json={"enabled": True})
+        assert ap_on.status_code == 200
+        assert ap_on.json()["enabled"] is True
+        ap_off = client.post("/api/autopilot", json={"enabled": False})
+        assert ap_off.status_code == 200
+        assert ap_off.json()["enabled"] is False
 
-    # Regression test: if one symbol raises RuntimeError on broker, /api/status & /api/scan stay 200 OK
-    orig_get_quote = app.state.engine.broker.get_quote
+        # Regression test: /api/backtest inside running async event loop must succeed (HTTP 200)
+        bt_resp = client.post("/api/backtest", json={"symbol": "XAUUSD", "bars": 600, "starting_equity": 10000})
+        assert bt_resp.status_code == 200
+        assert bt_resp.json()["bars_tested"] == 600
 
-    def flaky_quote(sym: str) -> QuoteTick:
-        if sym == "NAS100":
-            raise RuntimeError("Failed to fetch MT5 tick/info for NAS100: (-4, 'Terminal: Not found')")
-        return orig_get_quote(sym)
+        # Regression test: if one symbol raises RuntimeError on broker, /api/status & /api/scan stay 200 OK
+        orig_get_quote = app.state.engine.broker.get_quote
 
-    app.state.engine.broker.get_quote = flaky_quote
-    r_degraded = client.get("/api/status")
-    assert r_degraded.status_code == 200
-    nas_entry = next(w for w in r_degraded.json()["watchlist"] if w["symbol"] == "NAS100")
-    assert nas_entry["available"] is False
-    gold_entry = next(w for w in r_degraded.json()["watchlist"] if w["symbol"] == "XAUUSD")
-    assert gold_entry["available"] is True
+        def flaky_quote(sym: str) -> QuoteTick:
+            if sym == "NAS100":
+                raise RuntimeError("Failed to fetch MT5 tick/info for NAS100: (-4, 'Terminal: Not found')")
+            return orig_get_quote(sym)
 
-    scan_degraded = client.post("/api/scan?auto_execute=false")
-    assert scan_degraded.status_code == 200
+        app.state.engine.broker.get_quote = flaky_quote
+        r_degraded = client.get("/api/status")
+        assert r_degraded.status_code == 200
+        nas_entry = next(w for w in r_degraded.json()["watchlist"] if w["symbol"] == "NAS100")
+        assert nas_entry["available"] is False
+        gold_entry = next(w for w in r_degraded.json()["watchlist"] if w["symbol"] == "XAUUSD")
+        assert gold_entry["available"] is True
+
+        scan_degraded = client.post("/api/scan?auto_execute=false")
+        assert scan_degraded.status_code == 200
