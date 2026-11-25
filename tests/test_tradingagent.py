@@ -406,3 +406,16 @@ def test_spread_aware_ablation_backtester_and_api(tmp_path: Path) -> None:
 
         scan_degraded = client.post("/api/scan?auto_execute=false")
         assert scan_degraded.status_code == 200
+
+
+def test_windows_launcher_scripts_avoid_self_termination() -> None:
+    root = Path(__file__).resolve().parents[1]
+    start_bat = (root / "scripts" / "start_tradingagent.bat").read_text(encoding="utf-8")
+    stop_bat = (root / "scripts" / "stop_tradingagent.bat").read_text(encoding="utf-8")
+
+    # Launcher title must never match the taskkill WINDOWTITLE filter
+    assert "title TA001_Bootstrapper" in start_bat
+    assert "TA001_Live_Engine*" in start_bat
+    assert "TradingAgent*" not in start_bat
+    assert "-m tradingagent.cli dashboard --autopilot" in start_bat
+    assert "TA001_Live_Engine*" in stop_bat

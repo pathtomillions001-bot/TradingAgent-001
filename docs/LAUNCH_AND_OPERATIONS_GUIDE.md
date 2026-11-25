@@ -181,7 +181,22 @@ Look at the JSON printed: confirm `spread_points` matches your MT5 Market Watch 
 ### Step 6: Launch Autonomous Demo Trading & Monitor Daily
 Once Checks 1–3 pass, you have **two ways** to run the agent live on your laptop:
 
-#### Option A: Run Both Visual Dashboard + Autonomous Loop (Recommended)
+#### Option A: One-Process Dashboard + Built-In 15s Autopilot + Global Hotkey (`Ctrl + Alt + T`)
+Install the Desktop Shortcuts & Global Keyboard Hotkeys once:
+```bat
+.venv\Scripts\activate
+tradingagent shortcuts --startup
+```
+- Press **`Ctrl + Alt + T`** anytime on your Windows 10 laptop to automatically start **MetaTrader 5** + **Ollama** + **Control Center (`http://localhost:8000`) with 15s Gold-First Autopilot ON**!
+- Press **`Ctrl + Alt + S`** anytime to stop the local dashboard/autopilot cleanly.
+- Or run directly in one terminal window:
+  ```bat
+  .venv\Scripts\activate
+  tradingagent dashboard --autopilot --interval 15
+  ```
+- *(External Drive / Low `C:` Disk Space Mode)*: The entire repository (`.venv`, SQLite, DuckDB) and Ollama (`OllamaApp` + `OllamaModels` via `OLLAMA_MODELS` / NTFS directory junctions `mklink /J`) can live on an external USB drive (e.g., `G:\Trading\TradingAgent-001`, `G:\OllamaApp`, `G:\OllamaModels`), freeing 100% of model and dataset storage from `C:` while keeping `terminal64.exe` on `C:`.
+
+#### Option B: Separate Terminal Windows (Manual Split Mode)
 - **Terminal Window 1 (Dashboard UI at `http://localhost:8000`):**
   ```bat
   .venv\Scripts\activate
