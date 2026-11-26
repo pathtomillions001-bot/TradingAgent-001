@@ -73,29 +73,33 @@ class PaperMT5Adapter(BrokerAdapter):
             noise = self.rng.normal(0.0, vol * 0.65, size=n_bars).cumsum() * 0.25
             closes = base_mid + macro_wave + noise
 
-            # Inject a clean recent bullish liquidity sweep + displacement on XAUUSD so live demo showcases real structure
+            # Inject a clean fresh 5-bar sell-side liquidity sweep + FVG reclaim on XAUUSD closed bar [-2]
             if sym == "XAUUSD":
-                recent_base = closes[-12]
-                # Consolidation -> sweep below 20-bar low -> sharp 3-bar bullish displacement + FVG -> continuation
-                pattern = np.array([
-                    0.2, 0.0, -0.3, -0.5, -0.4, -3.6,  # index -6 sweeps below prior 20-bar low
-                    -1.2, 1.8, 4.6, 5.4, 5.8, 6.2,     # strong bullish displacement + FVG inside last 10 bars
-                ]) * (vol * 0.95)
-                closes[-12:] = recent_base + pattern
+                recent_base = float(np.mean(closes[-22:-8]))
+                closes[-8:] = recent_base + np.array([0.2, 0.0, -0.3, -1.1, -0.4, 0.55, 0.95, 1.05]) * vol
 
             opens = np.roll(closes, 1)
             opens[0] = closes[0] - vol * 0.1
             wick_up = np.abs(self.rng.normal(0.0, vol * 0.45, size=n_bars))
             wick_dn = np.abs(self.rng.normal(0.0, vol * 0.45, size=n_bars))
             if sym == "XAUUSD":
-                wick_dn[-7] = vol * 3.2  # Distinct sweep tail wick
-                # Ensure clean 3-bar bullish FVG gap at [-3] vs [-5]
-                wick_up[-5] = 0.05
-                wick_dn[-3] = 0.05
+                wick_dn[-6:] = vol * 0.08
+                wick_up[-4] = 0.02
+                wick_dn[-2] = 0.02
 
             highs = np.maximum(opens, closes) + wick_up
             lows = np.minimum(opens, closes) - wick_dn
+            if sym == "XAUUSD":
+                # Guarantee [-5] cleanly sweeps prior 20-bar liquidity low while keeping stop <= 2.0*ATR
+                prior_20_min = float(np.min(lows[-25:-5]))
+                lows[-5] = round(prior_20_min - vol * 0.15, 5)
+                closes[-2] = round(lows[-5] + vol * 1.65, 5)
+                opens[-2] = round(closes[-2] - vol * 0.45, 5)
+                highs[-2] = round(closes[-2] + vol * 0.12, 5)
+                lows[-2] = round(max(opens[-2] - vol * 0.05, highs[-4] + vol * 0.08), 5)
             volumes = self.rng.integers(180, 1450, size=n_bars)
+            if sym == "XAUUSD":
+                volumes[-4:-1] = 1950  # Institutional RVOL >= 1.35x on displacement reclaim
             spreads = np.clip(
                 self.rng.normal(spread_pts, spread_pts * 0.12, size=n_bars),
                 spread_pts * 0.6,

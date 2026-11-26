@@ -18,6 +18,7 @@ from tradingagent.indicators import compute_ema, detect_fvg_and_sweeps
 from tradingagent.memory import StateAndMemoryStore
 from tradingagent.models import AgentAction, CandidateSetup, QuoteTick, Side, SetupType
 from tradingagent.risk import DeterministicRiskFirewall
+from tradingagent.scanner import evaluate_regime_signal_at_index
 from tradingagent.agents import MultiAgentCommittee
 
 logger = logging.getLogger(__name__)
@@ -100,21 +101,40 @@ def generate_realistic_intraday_dataset(
             regime_drift = float(rng.choice([-1.0, -0.45, 0.0, 0.55, 1.1])) * base_vol * 0.22
 
         # Periodic London/NY stop-hunt sweep followed by institutional impulse continuation
+        is_impulse_bar = False
+        is_fakeout_bar = False
         if in_killzone and i > 30 and i % 85 == 0:
             sweep_dir = 1.0 if regime_drift >= 0 else -1.0
             op = price
-            # Wick sweeps liquidity opposite to true move, then closes strongly in trend direction
             cl = op + sweep_dir * base_vol * 1.9
             hi = max(op, cl) + (base_vol * 0.4 if sweep_dir > 0 else base_vol * 2.6)
             lo = min(op, cl) - (base_vol * 2.6 if sweep_dir > 0 else base_vol * 0.4)
             price = cl
+            is_impulse_bar = True
         elif in_killzone and i > 31 and (i - 1) % 85 == 0:
-            # Displacement candle creating clean FVG
             sweep_dir = 1.0 if regime_drift >= 0 else -1.0
             op = price
             cl = op + sweep_dir * base_vol * 2.3
             hi = max(op, cl) + base_vol * 0.35
             lo = min(op, cl) - base_vol * 0.20
+            price = cl
+            is_impulse_bar = True
+        elif in_killzone and i > 45 and i % 110 == 0:
+            # Realistic low-volume counter-trend retail bull/bear trap that snaps back next bars
+            trap_dir = -1.0 if regime_drift >= 0 else 1.0
+            op = price
+            cl = op + trap_dir * base_vol * 1.6
+            hi = max(op, cl) + base_vol * 1.8
+            lo = min(op, cl) - base_vol * 1.8
+            price = cl
+            is_fakeout_bar = True
+        elif in_killzone and i > 46 and (i - 1) % 110 == 0:
+            # Trap reversal snapback against retail chasers
+            snap_dir = 1.0 if regime_drift >= 0 else -1.0
+            op = price
+            cl = op + snap_dir * base_vol * 2.5
+            hi = max(op, cl) + base_vol * 0.4
+            lo = min(op, cl) - base_vol * 0.4
             price = cl
         else:
             op = price
@@ -132,7 +152,12 @@ def generate_realistic_intraday_dataset(
         # Rollover hour (21-22 UTC) widens spread realistically
         sp_mult = 2.1 if hr in (21, 22) else (0.92 if in_killzone else 1.18)
         spreads[i] = round(max(4.0, float(rng.normal(base_spread * sp_mult, base_spread * 0.1))), 1)
-        volumes[i] = int(rng.integers(350, 1900) if in_killzone else rng.integers(90, 480))
+        if is_impulse_bar:
+            volumes[i] = int(rng.integers(1450, 2400))
+        elif is_fakeout_bar:
+            volumes[i] = int(rng.integers(240, 520))
+        else:
+            volumes[i] = int(rng.integers(450, 1450) if in_killzone else rng.integers(90, 420))
 
     return pd.DataFrame({
         "timestamp": pd.to_datetime(timestamps, utc=True),
@@ -313,6 +338,8 @@ class _SimTrade:
     spread_cost_usd: float
     setup_type: str
     be_moved: bool = False
+    trail_stage: int = 0
+    peak_favorable: float = 0.0
 
 
 class SpreadAwareEventBacktester:
@@ -364,6 +391,7 @@ class SpreadAwareEventBacktester:
         equity_curve: list[dict] = []
         total_spread_cost = 0.0
         last_exit_idx = -99
+        last_was_sl = False
 
         n = len(feat)
         for i in range(220, n - 1):
@@ -372,8 +400,9 @@ class SpreadAwareEventBacktester:
             ts: pd.Timestamp = row["timestamp"]
             spread_pts = float(row["spread"])
             half_sp = (spread_pts * self.profile.point) / 2.0
+            live_atr = max(float(row["atr"]), self.profile.point * 20.0)
 
-            # 1. Manage open position on bar `i` (conservative SL-first intra-bar rule)
+            # 1. Manage open position on bar `i` (conservative SL-first intra-bar rule + 3-Stage Chandelier Trail)
             if active_trade is not None:
                 bar_high_bid = float(row["high"]) - half_sp
                 bar_low_bid = float(row["low"]) - half_sp
@@ -382,33 +411,75 @@ class SpreadAwareEventBacktester:
 
                 exit_price: float | None = None
                 exit_reason = ""
+                init_r = abs(active_trade.entry_price - active_trade.initial_sl)
 
                 if active_trade.side == Side.LONG:
-                    # Pessimistic check: SL checked BEFORE TP on same bar
+                    # Pessimistic check: active SL / trailed SL checked BEFORE TP on same bar
                     if bar_low_bid <= active_trade.sl:
                         exit_price = active_trade.sl
-                        exit_reason = "BE_STOP" if active_trade.be_moved else "SL"
+                        exit_reason = (
+                            "CHANDELIER_TRAIL"
+                            if active_trade.trail_stage >= 2
+                            else ("PROFIT_BE_SHIELD" if active_trade.be_moved else "SL")
+                        )
                     elif bar_high_bid >= active_trade.tp:
                         exit_price = active_trade.tp
                         exit_reason = "TP"
-                    else:
-                        # Check +1.0R Break-Even shift for subsequent bars
-                        init_r = abs(active_trade.entry_price - active_trade.initial_sl)
-                        if not active_trade.be_moved and init_r > 0 and (bar_high_bid - active_trade.entry_price) >= init_r:
-                            active_trade.sl = round(active_trade.entry_price + spread_pts * self.profile.point, 5)
+                    elif init_r > 0:
+                        active_trade.peak_favorable = max(active_trade.peak_favorable, bar_high_bid)
+                        peak_r = (active_trade.peak_favorable - active_trade.entry_price) / init_r
+                        if peak_r >= bt_settings.chandelier_start_r:
+                            cand_sl = max(
+                                active_trade.entry_price + 0.55 * init_r,
+                                active_trade.peak_favorable - bt_settings.chandelier_atr_mult * live_atr,
+                            )
+                            if cand_sl > active_trade.sl:
+                                active_trade.sl = round(cand_sl, 5)
+                                active_trade.be_moved = True
+                                active_trade.trail_stage = 2
+                        elif peak_r >= bt_settings.be_trigger_r and not active_trade.be_moved:
+                            lock_off = max(
+                                bt_settings.be_lock_r * init_r,
+                                spread_pts * self.profile.point * 1.4,
+                            )
+                            active_trade.sl = round(active_trade.entry_price + lock_off, 5)
                             active_trade.be_moved = True
+                            active_trade.trail_stage = 1
                 else:
                     if bar_high_ask >= active_trade.sl:
                         exit_price = active_trade.sl
-                        exit_reason = "BE_STOP" if active_trade.be_moved else "SL"
+                        exit_reason = (
+                            "CHANDELIER_TRAIL"
+                            if active_trade.trail_stage >= 2
+                            else ("PROFIT_BE_SHIELD" if active_trade.be_moved else "SL")
+                        )
                     elif bar_low_ask <= active_trade.tp:
                         exit_price = active_trade.tp
                         exit_reason = "TP"
-                    else:
-                        init_r = abs(active_trade.initial_sl - active_trade.entry_price)
-                        if not active_trade.be_moved and init_r > 0 and (active_trade.entry_price - bar_low_ask) >= init_r:
-                            active_trade.sl = round(active_trade.entry_price - spread_pts * self.profile.point, 5)
+                    elif init_r > 0:
+                        active_trade.peak_favorable = (
+                            min(active_trade.peak_favorable, bar_low_ask)
+                            if active_trade.peak_favorable > 0
+                            else bar_low_ask
+                        )
+                        peak_r = (active_trade.entry_price - active_trade.peak_favorable) / init_r
+                        if peak_r >= bt_settings.chandelier_start_r:
+                            cand_sl = min(
+                                active_trade.entry_price - 0.55 * init_r,
+                                active_trade.peak_favorable + bt_settings.chandelier_atr_mult * live_atr,
+                            )
+                            if cand_sl < active_trade.sl:
+                                active_trade.sl = round(cand_sl, 5)
+                                active_trade.be_moved = True
+                                active_trade.trail_stage = 2
+                        elif peak_r >= bt_settings.be_trigger_r and not active_trade.be_moved:
+                            lock_off = max(
+                                bt_settings.be_lock_r * init_r,
+                                spread_pts * self.profile.point * 1.4,
+                            )
+                            active_trade.sl = round(active_trade.entry_price - lock_off, 5)
                             active_trade.be_moved = True
+                            active_trade.trail_stage = 1
 
                 if exit_price is not None:
                     diff = (
@@ -435,126 +506,58 @@ class SpreadAwareEventBacktester:
                         "r_multiple": r_mult,
                         "reason": exit_reason,
                     })
+                    last_was_sl = exit_reason == "SL"
                     active_trade = None
                     last_exit_idx = i
 
             if i % 20 == 0:
                 equity_curve.append({"timestamp": ts.isoformat(), "equity": equity})
 
-            # 2. If flat and cooldown elapsed, check signal on closed bar `i` for entry at `i+1` open
-            if active_trade is not None or (i - last_exit_idx) < max(3, bt_settings.cooldown_minutes_per_symbol // 5):
+            # 2. Enforce normal cooldown or extended post-SL anti-whipsaw cooldown
+            req_cooldown_bars = (
+                max(6, bt_settings.loss_cooldown_minutes // 5)
+                if (use_agent_committee and last_was_sl)
+                else max(3, bt_settings.cooldown_minutes_per_symbol // 5)
+            )
+            if active_trade is not None or (i - last_exit_idx) < req_cooldown_bars:
                 continue
 
-            if spread_pts > self.profile.max_spread_points:
-                continue
-
-            close = float(row["close"])
-            atr = max(float(row["atr"]), self.profile.point * 20)
-            rsi = float(row["rsi"])
-            adx = float(row["adx"])
-            ema20 = float(row["ema_20"])
-            ema50 = float(row["ema_50"])
-            vwap = float(row["vwap"])
-
-            if close > float(row["h1_ema20"]) >= float(row["h1_ema50"]):
+            h1_e20 = float(row["h1_ema20"])
+            h1_e50 = float(row["h1_ema50"])
+            if h1_e20 > h1_e50 * 1.0001:
                 htf_bias = "BULLISH"
-            elif close < float(row["h1_ema20"]) <= float(row["h1_ema50"]):
+            elif h1_e20 < h1_e50 * 0.9999:
                 htf_bias = "BEARISH"
             else:
                 htf_bias = "NEUTRAL"
 
-            side: Side | None = None
-            stype: SetupType | None = None
-            score = 55.0
-            notes: list[str] = []
-
-            if bool(row["recent_sweep_low"]) and bool(row["bullish_fvg"]) and close > ema20 and rsi < 74:
-                side = Side.LONG
-                stype = SetupType.LIQUIDITY_SWEEP_FVG
-                score = 78.0
-                notes.append("Sweep low + Bullish FVG")
-            elif bool(row["recent_sweep_high"]) and bool(row["bearish_fvg"]) and close < ema20 and rsi > 26:
-                side = Side.SHORT
-                stype = SetupType.LIQUIDITY_SWEEP_FVG
-                score = 78.0
-                notes.append("Sweep high + Bearish FVG")
-            elif (
-                htf_bias == "BULLISH"
-                and close > vwap
-                and ema20 > ema50
-                and float(feat["low"].iloc[i - 1]) <= ema20 * 1.0005
-                and close > float(feat["high"].iloc[i - 1])
-                and 44 <= rsi <= 67
-            ):
-                side = Side.LONG
-                stype = SetupType.VWAP_EMA_PULLBACK
-                score = 70.0
-                notes.append("VWAP/EMA20 bullish continuation")
-            elif (
-                htf_bias == "BEARISH"
-                and close < vwap
-                and ema20 < ema50
-                and float(feat["high"].iloc[i - 1]) >= ema20 * 0.9995
-                and close < float(feat["low"].iloc[i - 1])
-                and 33 <= rsi <= 56
-            ):
-                side = Side.SHORT
-                stype = SetupType.VWAP_EMA_PULLBACK
-                score = 70.0
-                notes.append("VWAP/EMA20 bearish continuation")
-
-            if side is None or stype is None:
-                continue
-
-            in_prime = self.profile.is_in_prime_session(int(ts.hour))
-            if (side == Side.LONG and htf_bias == "BULLISH") or (side == Side.SHORT and htf_bias == "BEARISH"):
-                score += 9.0
-            if in_prime:
-                score += 7.0
-            if self.profile.canonical == "XAUUSD":
-                score += 4.0
-
-            sess_lbl = "NY_OVERLAP_PRIME" if 12 <= ts.hour < 17 else ("LONDON_SESSION" if 7 <= ts.hour < 12 else "ASIAN_OFF_PEAK")
-            next_open_mid = float(next_bar["open"])
-            entry_fill = round(next_open_mid + half_sp, 5) if side == Side.LONG else round(next_open_mid - half_sp, 5)
-
-            sl_dist = 1.45 * atr
-            tp_dist = 3.20 * atr
-            sp_ratio = (spread_pts * self.profile.point) / sl_dist
-            if sp_ratio > self.profile.max_spread_to_sl_ratio:
-                continue
-
-            sl_price = round(entry_fill - sl_dist, 5) if side == Side.LONG else round(entry_fill + sl_dist, 5)
-            tp_price = round(entry_fill + tp_dist, 5) if side == Side.LONG else round(entry_fill - tp_dist, 5)
-
-            cand = CandidateSetup(
-                setup_id=f"BT-{i}",
-                timestamp=ts.to_pydatetime(),
-                symbol=self.profile.canonical,
-                tier=self.profile.tier,
-                side=side,
-                setup_type=stype,
-                timeframe="M5",
+            cand = evaluate_regime_signal_at_index(
+                profile=self.profile,
+                feat=feat,
+                idx=i,
                 htf_bias=htf_bias,
-                entry_price=entry_fill,
-                stop_loss=sl_price,
-                take_profit=tp_price,
-                atr=round(atr, 5),
-                adx=round(adx, 2),
-                rsi=round(rsi, 2),
-                vwap_distance_atr=round((close - vwap) / atr, 3),
-                spread_points=spread_pts,
-                spread_to_sl_ratio=round(sp_ratio, 4),
-                rr_ratio=round(tp_dist / sl_dist, 2),
-                quant_score=min(99.0, score),
-                session_label=sess_lbl,
-                notes=notes,
+                live_spread_points=spread_pts,
+                eval_ts=ts.to_pydatetime(),
+                setup_id_prefix=f"BT-{i}",
             )
+            if cand is None:
+                continue
 
             if use_agent_committee:
                 verdict = committee.evaluate_candidate_sync(cand)
                 if verdict.action not in (AgentAction.EXECUTE_LONG, AgentAction.EXECUTE_SHORT):
                     continue
+
+            next_open_mid = float(next_bar["open"])
+            entry_fill = (
+                round(next_open_mid + half_sp, 5)
+                if cand.side == Side.LONG
+                else round(next_open_mid - half_sp, 5)
+            )
+            sl_dist = abs(cand.entry_price - cand.stop_loss)
+            tp_dist = abs(cand.take_profit - cand.entry_price)
+            sl_price = round(entry_fill - sl_dist, 5) if cand.side == Side.LONG else round(entry_fill + sl_dist, 5)
+            tp_price = round(entry_fill + tp_dist, 5) if cand.side == Side.LONG else round(entry_fill - tp_dist, 5)
 
             sim_quote = QuoteTick(
                 symbol=self.profile.canonical,
@@ -578,7 +581,7 @@ class SpreadAwareEventBacktester:
             sp_cost = round(spread_pts * self.tick_value * lots, 2)
             total_spread_cost += sp_cost
             active_trade = _SimTrade(
-                side=side,
+                side=cand.side,
                 entry_idx=i + 1,
                 entry_time=next_bar["timestamp"],
                 entry_price=entry_fill,
@@ -588,7 +591,8 @@ class SpreadAwareEventBacktester:
                 lots=lots,
                 risk_usd=risk_usd,
                 spread_cost_usd=sp_cost,
-                setup_type=stype.value,
+                setup_type=cand.setup_type.value,
+                peak_favorable=entry_fill,
             )
 
         equity_curve.append({"timestamp": feat.iloc[-1]["timestamp"].isoformat(), "equity": equity})

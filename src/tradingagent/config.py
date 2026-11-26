@@ -97,6 +97,13 @@ class AppSettings(BaseSettings):
     max_net_usd_risk_pct: float = 1.25
     min_risk_reward_ratio: float = 1.80
     cooldown_minutes_per_symbol: int = 15
+    loss_cooldown_minutes: int = 45
+
+    # 3-Stage Ratchet & Chandelier ATR Trailing Stop Parameters
+    be_trigger_r: float = 1.15
+    be_lock_r: float = 0.20
+    chandelier_start_r: float = 1.55
+    chandelier_atr_mult: float = 1.65
 
     # Local Persistence Paths
     sqlite_path: Path = ROOT_DIR / "data" / "state" / "tradingagent.sqlite3"

@@ -7,6 +7,7 @@ import math
 
 from tradingagent.broker import BrokerAdapter
 from tradingagent.config import AppSettings, SymbolProfile
+from tradingagent.indicators import compute_atr
 from tradingagent.models import (
     AccountSnapshot,
     CandidateSetup,
@@ -37,9 +38,13 @@ class DeterministicRiskFirewall:
         self.profiles = profiles
         self.kill_switch_active: bool = False
         self._last_trade_at: dict[str, datetime] = {}
+        self._last_sl_at: dict[str, datetime] = {}
 
     def record_trade_timestamp(self, symbol: str, ts: datetime | None = None) -> None:
         self._last_trade_at[symbol] = ts or datetime.now(timezone.utc)
+
+    def record_stop_loss_timestamp(self, symbol: str, ts: datetime | None = None) -> None:
+        self._last_sl_at[symbol] = ts or datetime.now(timezone.utc)
 
     def compute_open_net_usd_risk_pct(
         self,
@@ -194,13 +199,15 @@ class DeterministicRiskFirewall:
         if setup.symbol == "XAUUSD" and gold_open >= self.settings.max_gold_positions:
             rejections.append(f"MAX_GOLD_POSITIONS: {gold_open} >= {self.settings.max_gold_positions}")
 
-        # 4. Cooldown Check
+        # 4. Cooldown Check (standard cooldown + extended post-SL anti-whipsaw cooldown)
+        last_sl_ts = self._last_sl_at.get(setup.symbol)
         last_ts = self._last_trade_at.get(setup.symbol)
-        if last_ts is not None:
-            elapsed = now - last_ts
-            if elapsed < timedelta(minutes=self.settings.cooldown_minutes_per_symbol):
-                rem = self.settings.cooldown_minutes_per_symbol - int(elapsed.total_seconds() // 60)
-                rejections.append(f"SYMBOL_COOLDOWN: {setup.symbol} cooling down ({rem}m remaining)")
+        if last_sl_ts is not None and (now - last_sl_ts) < timedelta(minutes=self.settings.loss_cooldown_minutes):
+            rem = self.settings.loss_cooldown_minutes - int((now - last_sl_ts).total_seconds() // 60)
+            rejections.append(f"POST_SL_COOLDOWN: {setup.symbol} anti-whipsaw lock ({rem}m remaining)")
+        elif last_ts is not None and (now - last_ts) < timedelta(minutes=self.settings.cooldown_minutes_per_symbol):
+            rem = self.settings.cooldown_minutes_per_symbol - int((now - last_ts).total_seconds() // 60)
+            rejections.append(f"SYMBOL_COOLDOWN: {setup.symbol} cooling down ({rem}m remaining)")
         else:
             passed.append("Cooldown clear")
 
@@ -321,34 +328,114 @@ class DeterministicRiskFirewall:
 
     def manage_open_positions_intraday(self, broker: BrokerAdapter) -> list[str]:
         """
-        Real-time sub-second deterministic trade manager (0 LLM calls):
-          - At +1.0R unrealized excursion: shifts SL to Break-Even + small commission buffer
-          - At +1.8R unrealized excursion: trails SL behind price by 1.1x initial R
+        Real-time 3-Stage Server-Side Ratchet & Chandelier ATR Trailing Engine (0 LLM calls):
+          - Stage 1 (0.0R -> +be_trigger_r): Structural wick SL gives trade breathing room
+          - Stage 2 (At +be_trigger_r, e.g. +1.15R): Profit-Plus BE Shield locks +0.20R above spread
+          - Stage 3 (At +chandelier_start_r, e.g. +1.55R+): Dynamic Chandelier Volatility Trail
+            ratchets MT5 server-side SL behind `Highest_High_Since_Entry - 1.65 * ATR(14)` (strictly one-way!)
         """
         actions: list[str] = []
         for pos in broker.get_open_positions():
-            initial_r_dist = abs(pos.entry_price - pos.sl) if not pos.be_moved else 0.0
-            if initial_r_dist <= 0:
-                continue
-
+            is_long = pos.side == Side.LONG
             try:
                 q = broker.get_quote(pos.symbol)
             except Exception:
                 continue
-            favorable_move = (
-                (q.bid - pos.entry_price) if pos.side == Side.LONG else (pos.entry_price - q.ask)
-            )
-            r_multiple = favorable_move / initial_r_dist
 
-            if r_multiple >= 1.0 and not pos.be_moved:
-                buffer = q.spread_price * 1.2
-                new_sl = (
-                    round(pos.entry_price + buffer, 5)
-                    if pos.side == Side.LONG
-                    else round(pos.entry_price - buffer, 5)
-                )
-                if broker.modify_position_sl_tp(pos.ticket, new_sl=new_sl, new_tp=pos.tp):
+            prof = self.profiles.get(pos.symbol)
+            min_pt = prof.point if prof else q.point
+
+            # Live ATR & post-entry price extreme from M5 bars (survives app restarts seamlessly!)
+            live_atr = abs(pos.tp - pos.entry_price) / 4.5 if pos.tp > 0 else q.spread_price * 8.0
+            extreme_bar_price = q.bid if is_long else q.ask
+            try:
+                m5 = broker.get_bars(pos.symbol, "M5", 48)
+                if len(m5) >= 16:
+                    live_atr = max(float(compute_atr(m5, 14).iloc[-1]), min_pt * 20.0)
+                    since_mask = m5["timestamp"] >= (pos.opened_at - timedelta(minutes=5))
+                    recent_slice = m5.loc[since_mask] if since_mask.any() else m5.tail(3)
+                    extreme_bar_price = (
+                        float(recent_slice["high"].max()) if is_long else float(recent_slice["low"].min())
+                    )
+            except Exception:
+                pass
+
+            sl_in_profit = (pos.sl > pos.entry_price) if (is_long and pos.sl > 0) else (0 < pos.sl < pos.entry_price)
+            already_be = bool(pos.be_moved or sl_in_profit)
+
+            # Recover true initial 1R distance even after SL has already moved into profit
+            tp_dist = abs(pos.tp - pos.entry_price) if pos.tp > 0 else 0.0
+            if not already_be and pos.sl > 0:
+                initial_r_dist = abs(pos.entry_price - pos.sl)
+            elif tp_dist > 0:
+                initial_r_dist = tp_dist / 3.20
+            else:
+                initial_r_dist = max(1.5 * live_atr, min_pt * 25.0)
+
+            if initial_r_dist <= 0:
+                continue
+
+            mark = q.bid if is_long else q.ask
+            if is_long:
+                peak_price = max(pos.entry_price, mark, pos.peak_favorable_price, extreme_bar_price)
+                favorable_now = mark - pos.entry_price
+                favorable_peak = peak_price - pos.entry_price
+            else:
+                prev_trough = pos.peak_favorable_price if pos.peak_favorable_price > 0 else mark
+                peak_price = min(pos.entry_price, mark, prev_trough, extreme_bar_price)
+                favorable_now = pos.entry_price - mark
+                favorable_peak = pos.entry_price - peak_price
+
+            pos.peak_favorable_price = peak_price
+            live_r = favorable_now / initial_r_dist
+            peak_r = favorable_peak / initial_r_dist
+            broker_min_gap = max(q.stops_level_points * q.point * 1.25, q.spread_price * 1.6)
+            min_ratchet_step = max(0.14 * live_atr, q.spread_price * 1.2)
+
+            # Stage 3: Chandelier ATR Volatility Ratchet Trail (+1.55R+)
+            if max(live_r, peak_r) >= self.settings.chandelier_start_r:
+                if is_long:
+                    raw_trail = max(
+                        pos.entry_price + 0.55 * initial_r_dist,
+                        peak_price - self.settings.chandelier_atr_mult * live_atr,
+                    )
+                    safe_trail = round(min(raw_trail, q.bid - broker_min_gap), 5)
+                    improves = safe_trail > (pos.sl + min_ratchet_step)
+                else:
+                    raw_trail = min(
+                        pos.entry_price - 0.55 * initial_r_dist,
+                        peak_price + self.settings.chandelier_atr_mult * live_atr,
+                    )
+                    safe_trail = round(max(raw_trail, q.ask + broker_min_gap), 5)
+                    improves = (pos.sl <= 0) or (safe_trail < (pos.sl - min_ratchet_step))
+
+                if improves and broker.modify_position_sl_tp(pos.ticket, new_sl=safe_trail, new_tp=pos.tp):
+                    pos.sl = safe_trail
                     pos.be_moved = True
-                    actions.append(f"Ticket #{pos.ticket} ({pos.symbol}): Moved SL to Break-Even+ ({new_sl}) at +1.0R")
+                    pos.trail_stage = 2
+                    locked_r = abs(safe_trail - pos.entry_price) / initial_r_dist
+                    actions.append(
+                        f"Ticket #{pos.ticket} ({pos.symbol}): Chandelier ATR Trail ratcheted SL -> {safe_trail} (+{locked_r:.2f}R locked)"
+                    )
+                continue
+
+            # Stage 2: Profit-Plus Break-Even Shield (+1.15R -> locks +0.20R above spread)
+            if live_r >= self.settings.be_trigger_r and not already_be:
+                lock_offset = max(self.settings.be_lock_r * initial_r_dist, q.spread_price * 1.5)
+                if is_long:
+                    new_sl = round(min(pos.entry_price + lock_offset, q.bid - broker_min_gap), 5)
+                    valid_be = new_sl > pos.entry_price
+                else:
+                    new_sl = round(max(pos.entry_price - lock_offset, q.ask + broker_min_gap), 5)
+                    valid_be = new_sl < pos.entry_price
+
+                if valid_be and broker.modify_position_sl_tp(pos.ticket, new_sl=new_sl, new_tp=pos.tp):
+                    pos.sl = new_sl
+                    pos.be_moved = True
+                    pos.trail_stage = 1
+                    locked_r = abs(new_sl - pos.entry_price) / initial_r_dist
+                    actions.append(
+                        f"Ticket #{pos.ticket} ({pos.symbol}): Profit-Plus BE Shield locked SL -> {new_sl} (+{locked_r:.2f}R banked)"
+                    )
 
         return actions

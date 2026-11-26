@@ -104,6 +104,8 @@ class OpenPosition(BaseModel):
     opened_at: datetime
     setup_type: str = "MANUAL_OR_AGENT"
     be_moved: bool = False
+    trail_stage: int = 0  # 0=Initial Wick SL, 1=Profit-Plus BE (+0.20R), 2=Chandelier ATR Ratchet Trail
+    peak_favorable_price: float = 0.0
     partial_taken: bool = False
     magic: int = 2026001
 
@@ -129,6 +131,9 @@ class CandidateSetup(BaseModel):
     rr_ratio: float
     quant_score: float = Field(ge=0.0, le=100.0)
     session_label: str
+    regime: str = "TREND_EXPANSION"
+    rvol: float = 1.0
+    efficiency_ratio: float = 0.38
     notes: list[str] = Field(default_factory=list)
 
 

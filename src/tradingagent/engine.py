@@ -49,8 +49,8 @@ class LiveTelemetryHub:
             {
                 "step": 1,
                 "key": "be_guard",
-                "title": "Position & BE Guard",
-                "sub": "+1.0R Break-Even Lock",
+                "title": "Chandelier & BE Trail",
+                "sub": "+1.15R BE · 1.65x ATR Trail",
                 "status": "standby",
                 "detail": "Monitoring open tickets",
                 "ms": 0.0,
@@ -58,8 +58,8 @@ class LiveTelemetryHub:
             {
                 "step": 2,
                 "key": "scanner",
-                "title": "Gold-First Scanner",
-                "sub": "M5/H1 Sweep + FVG + VWAP",
+                "title": "Regime Gold Scanner",
+                "sub": "Sweep · Squeeze ORB · Pullback",
                 "status": "standby",
                 "detail": "XAUUSD Priority #1",
                 "ms": 0.0,
