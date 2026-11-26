@@ -37,54 +37,58 @@ class AutopilotToggleRequest(BaseModel):
 
 
 def _enrich_position_lifecycle(pos: OpenPosition) -> dict[str, Any]:
-    """Computes live R-multiple, 5-stage trade lifecycle step, and SL->Entry->BE->TP progress geometry."""
+    """Computes live R-multiple, 5-stage Chandelier trade lifecycle step, and SL->Entry->BE->TP progress geometry."""
     d = pos.model_dump(mode="json")
     is_long = pos.side == Side.LONG
 
-    # Detect if SL has already been shifted to or past entry (Break-Even locked on MT5 server!)
     sl_at_or_past_be = False
     if pos.sl > 0:
-        sl_at_or_past_be = (pos.sl >= pos.entry_price) if is_long else (pos.sl <= pos.entry_price)
+        sl_at_or_past_be = (pos.sl > pos.entry_price) if is_long else (pos.sl < pos.entry_price)
     be_locked = bool(pos.be_moved or sl_at_or_past_be)
 
     tp_dist = abs(pos.tp - pos.entry_price) if pos.tp > 0 else 0.0
     raw_sl_dist = abs(pos.entry_price - pos.sl) if pos.sl > 0 else 0.0
-    # When BE is already locked, estimate original 1R from TP / 2.2 so R-multiple stays meaningful
-    initial_r_dist = (tp_dist / 2.2) if (be_locked and tp_dist > 0) else raw_sl_dist
+    initial_r_dist = (tp_dist / 3.20) if (be_locked and tp_dist > 0) else raw_sl_dist
     if initial_r_dist <= 1e-9:
-        initial_r_dist = max(tp_dist / 2.2, abs(pos.entry_price) * 0.0015, 1e-5)
+        initial_r_dist = max(tp_dist / 3.20, abs(pos.entry_price) * 0.0015, 1e-5)
 
     favorable = (pos.current_price - pos.entry_price) if is_long else (pos.entry_price - pos.current_price)
     current_r = round(favorable / initial_r_dist, 2)
-    target_r = round(tp_dist / initial_r_dist, 2) if tp_dist > 0 else 2.2
+    target_r = round(tp_dist / initial_r_dist, 2) if tp_dist > 0 else 3.20
+    locked_r = round((abs(pos.sl - pos.entry_price) / initial_r_dist), 2) if sl_at_or_past_be else 0.0
 
-    # Map [-1.0R .. +target_r] onto [0% .. 100%] bar coordinates
-    span_r = 1.0 + max(1.2, target_r)
+    span_r = 1.0 + max(1.5, target_r)
     progress_pct = round(min(100.0, max(0.0, ((current_r + 1.0) / span_r) * 100.0)), 1)
     entry_pct = round((1.0 / span_r) * 100.0, 1)
-    be_pct = round((2.0 / span_r) * 100.0, 1)
+    be_pct = round(((1.0 + 1.15) / span_r) * 100.0, 1)
 
-    if be_locked and current_r >= target_r * 0.72:
+    is_chandelier = pos.trail_stage >= 2 or locked_r >= 0.45
+    if is_chandelier:
         step = 5
-        step_label = "Approaching Take-Profit Target"
+        step_label = f"Chandelier ATR Trail Active (+{locked_r:.2f}R Locked)"
     elif be_locked:
         step = 4
-        step_label = "Break-Even Shield Locked (+1R Protected)"
+        step_label = f"Profit-Plus BE Shield (+{locked_r:.2f}R Banked)"
     elif current_r >= 0.30:
         step = 3
-        rem_r = max(0.0, 1.0 - current_r)
-        step_label = f"Pushing for +1R Break-Even ({rem_r:.2f}R away)"
+        rem_r = max(0.0, 1.15 - current_r)
+        step_label = f"Pushing for +1.15R BE Lock ({rem_r:.2f}R away)"
     elif pos.sl > 0 and pos.tp > 0:
         step = 2
-        step_label = "Server-Side Hard SL & TP Armed"
+        step_label = "Structural Wick SL & 3.2R TP Armed"
     else:
         step = 1
         step_label = "MT5 Market Order Filled"
 
-    be_trigger_price = round(pos.entry_price + initial_r_dist, 5) if is_long else round(pos.entry_price - initial_r_dist, 5)
+    be_trigger_price = (
+        round(pos.entry_price + 1.15 * initial_r_dist, 5)
+        if is_long
+        else round(pos.entry_price - 1.15 * initial_r_dist, 5)
+    )
 
     d.update({
         "be_locked": be_locked,
+        "locked_r": locked_r,
         "current_r": current_r,
         "target_r": target_r,
         "be_trigger_price": be_trigger_price,

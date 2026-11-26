@@ -1185,10 +1185,10 @@
 
       const stepNames = [
         '1. MT5 Filled',
-        '2. SL/TP Armed',
-        '3. Pushing +1R',
-        '4. BE Shield 🛡️',
-        '5. TP Target 🎯'
+        '2. Wick SL Armed',
+        '3. Pushing +1.15R',
+        '4. +0.20R BE Shield 🛡️',
+        '5. Chandelier Trail 🔥'
       ];
 
       deck.innerHTML = positions.map(p => {
@@ -1229,10 +1229,10 @@
               <div class="r-puck" style="left:${p.progress_pct}%;"></div>
             </div>
             <div class="r-labels">
-              <span style="color:var(--red);">SL: ${p.sl} (-1.0R)</span>
+              <span style="color:var(--red);">Active SL: ${p.sl}</span>
               <span>Entry: ${p.entry_price} (0R)</span>
-              <span style="color:var(--accent);">+1R BE Lock: ${p.be_trigger_price}</span>
-              <span style="color:var(--green);">TP: ${p.tp} (+${p.target_r}R)</span>
+              <span style="color:var(--accent);">+1.15R BE / Trail: ${p.be_trigger_price}</span>
+              <span style="color:var(--green);">Ceiling TP: ${p.tp} (+${p.target_r}R)</span>
             </div>
           </div>
         `;
@@ -1326,7 +1326,7 @@
                   <div>
                     <b style="color:${s.symbol === 'XAUUSD' ? 'var(--accent)' : '#fff'};">${s.symbol}</b>
                     &middot; <b style="color:${s.side === 'LONG' ? 'var(--green)' : 'var(--red)'};">${s.side}</b>
-                    &middot; <span style="color:var(--muted);">${s.setup_type} (Q:${s.quant_score} | RR:${s.rr_ratio})</span>
+                    &middot; <span style="color:var(--muted);">${s.setup_type} [${s.regime || 'REGIME'}] (Q:${s.quant_score} | RVOL:${s.rvol || 1.0}x)</span>
                   </div>
                   ${statusPill}
                 </div>

@@ -1,4 +1,4 @@
-"""Layer 2: Zero-Fee Multi-Agent Trading Committee (Ollama Local LLM + Deterministic Fallback)."""
+"""Layer 2: Zero-Fee Multi-Agent Trading Committee (Ollama Local LLM + Deterministic Institutional Rubric)."""
 
 from __future__ import annotations
 
@@ -24,16 +24,11 @@ from tradingagent.models import (
 class MultiAgentCommittee:
     """
     Combines TauricResearch/TradingAgents adversarial role specialization with QuantHarness
-    short-horizon microstructure focus — tuned specifically for a 16GB RAM Windows 10 laptop:
-      - Specialist 1: SMC & Microstructure Analyst (M5/H1 structure, VWAP, FVG, Sweep)
-      - Specialist 2: Session, Macro & Cross-Asset Regime Analyst (Killzones, USD beta, ADX/RSI)
-      - Specialist 3: Adversarial Trap & Spread Skeptic ("Why could this Gold setup fail?")
+    short-horizon microstructure & regime focus — tuned specifically for a 16GB RAM Windows 10 laptop:
+      - Specialist 1: SMC & Microstructure Analyst (M5/H1 structure, VWAP, FVG, Sweep, RVOL)
+      - Specialist 2: Session, Macro & Regime Analyst (Killzones, H1 trend, ADX & Efficiency Ratio)
+      - Specialist 3: Adversarial Trap & Spread Skeptic (Vetoes extended chases, weak RVOL, chop & counter-H1 traps)
       - Head Trader Synthesizer: Weighs all 3 specialists + Settled Memory Lessons -> Typed Verdict
-
-    100% Zero-Fee Execution:
-      - Queries local Ollama (`http://127.0.0.1:11434/api/chat` with `format: "json"`) when running
-      - Gracefully falls back to a deterministic institutional multi-agent scoring rubric if Ollama
-        is offline or disabled — ensuring zero crashes and <10ms backtest compatibility!
     """
 
     def __init__(self, settings: AppSettings, memory: StateAndMemoryStore) -> None:
@@ -67,78 +62,115 @@ class MultiAgentCommittee:
         """Deterministic baseline specialist analysis (always runs first so numbers are never hallucinated)."""
         expected_stance = "BULLISH" if setup.side == Side.LONG else "BEARISH"
 
-        # 1. Microstructure & SMC Specialist
+        # 1. Microstructure, RVOL & SMC Specialist
         smc_args = list(setup.notes)
         smc_flags: list[str] = []
         smc_conf = min(0.95, setup.quant_score / 100.0)
-        if abs(setup.vwap_distance_atr) > 2.6:
-            smc_flags.append(f"Price extended {setup.vwap_distance_atr:+.2f} ATR from session VWAP")
-            smc_conf -= 0.12
+
+        favorable_ext = setup.vwap_distance_atr if setup.side == Side.LONG else -setup.vwap_distance_atr
+        is_blowoff = favorable_ext > 6.5 and (
+            (setup.side == Side.LONG and setup.rsi > 65.0) or (setup.side == Side.SHORT and setup.rsi < 35.0)
+        )
+        if is_blowoff:
+            smc_flags.append(f"Parabolic blow-off extension ({setup.vwap_distance_atr:+.2f} ATR from VWAP, RSI={setup.rsi:.1f})")
+            smc_conf -= 0.16
+        elif favorable_ext >= 0.0:
+            smc_args.append(f"Trading on institutional side of Session VWAP ({setup.vwap_distance_atr:+.2f} ATR)")
+            smc_conf += 0.03
         else:
-            smc_args.append(f"Healthy VWAP distance ({setup.vwap_distance_atr:+.2f} ATR)")
+            smc_args.append(f"Mean-reversion discount to Session VWAP ({setup.vwap_distance_atr:+.2f} ATR)")
+
+        if setup.rvol >= 1.15:
+            smc_args.append(f"Strong institutional volume participation (RVOL {setup.rvol:.2f}x)")
+            smc_conf += 0.05
+        elif setup.rvol < 0.82:
+            smc_flags.append(f"Sub-average tick volume (RVOL {setup.rvol:.2f}x)")
+            smc_conf -= 0.12
 
         op_smc = SpecialistOpinion(
             agent_name="SMC_Microstructure_Analyst",
             stance=expected_stance,
-            confidence=round(max(0.3, smc_conf), 2),
+            confidence=round(min(0.96, max(0.30, smc_conf)), 2),
             key_arguments=smc_args,
             risk_flags=smc_flags,
         )
 
-        # 2. Macro & Session Regime Specialist
-        macro_args: list[str] = []
+        # 2. Macro, Regime & Session Specialist
+        macro_args: list[str] = [f"Detected market regime: {setup.regime} (ER={setup.efficiency_ratio:.2f})"]
         macro_flags: list[str] = []
         macro_stance = expected_stance
         macro_conf = 0.76
 
         if setup.session_label in ("LONDON_SESSION", "NY_OVERLAP_PRIME"):
-            macro_args.append(f"Active institutional liquidity window: {setup.session_label}")
-            macro_conf += 0.10
+            macro_args.append(f"Peak institutional liquidity killzone: {setup.session_label}")
+            macro_conf += 0.09
         else:
-            macro_flags.append(f"Off-peak liquidity session ({setup.session_label})")
-            macro_conf -= 0.14
+            macro_flags.append(f"Late/secondary session liquidity ({setup.session_label})")
+            macro_conf -= 0.12
 
         if (setup.side == Side.LONG and setup.htf_bias == "BULLISH") or (
             setup.side == Side.SHORT and setup.htf_bias == "BEARISH"
         ):
-            macro_args.append(f"H1 macro trend aligned ({setup.htf_bias})")
-            macro_conf += 0.08
+            macro_args.append(f"Aligned with H1 {setup.htf_bias} macro trend")
+            macro_conf += 0.09
         elif setup.htf_bias == "NEUTRAL":
-            macro_args.append("H1 trend transitional/neutral — rely on tight M5 invalidation")
+            macro_args.append("H1 trend transitional — relying on structural wick stop + Chandelier trail")
+            macro_conf -= 0.04
         else:
-            macro_flags.append(f"Counter-trend scalp against H1 {setup.htf_bias} bias")
-            macro_conf -= 0.18
+            macro_flags.append(f"Counter-trend entry against H1 {setup.htf_bias} bias")
+            macro_conf -= 0.24
             macro_stance = "NEUTRAL"
 
         op_macro = SpecialistOpinion(
             agent_name="Session_Macro_Analyst",
             stance=macro_stance,
-            confidence=round(min(0.95, max(0.25, macro_conf)), 2),
+            confidence=round(min(0.96, max(0.25, macro_conf)), 2),
             key_arguments=macro_args,
             risk_flags=macro_flags,
         )
 
-        # 3. Adversarial Trap & Execution Critic
+        # 3. Adversarial Trap, Regime & Spread Skeptic (Hard Veto Power)
         trap_args: list[str] = []
         trap_flags: list[str] = []
         trap_stance = "NEUTRAL"
-        trap_conf = 0.65
+        trap_conf = 0.68
 
-        if setup.spread_to_sl_ratio <= 0.08:
-            trap_args.append(f"Tight spread friction ({setup.spread_to_sl_ratio * 100:.1f}% of SL)")
-        else:
-            trap_flags.append(f"Moderate spread drag ({setup.spread_to_sl_ratio * 100:.1f}% of SL)")
+        is_counter_h1 = (setup.side == Side.LONG and setup.htf_bias == "BEARISH") or (
+            setup.side == Side.SHORT and setup.htf_bias == "BULLISH"
+        )
 
-        if (setup.side == Side.LONG and setup.rsi > 73) or (setup.side == Side.SHORT and setup.rsi < 27):
-            trap_flags.append(f"Momentum exhaustion risk (M5 RSI={setup.rsi:.1f}) — inducement trap warning")
+        if setup.spread_to_sl_ratio > 0.09:
+            trap_flags.append(f"High spread drag ({setup.spread_to_sl_ratio * 100:.1f}% of SL) erodes expectancy")
+            trap_stance = "VETO"
+            trap_conf = 0.86
+        elif (setup.side == Side.LONG and setup.rsi > 69.5) or (setup.side == Side.SHORT and setup.rsi < 30.5):
+            trap_flags.append(f"Momentum exhaustion trap (M5 RSI={setup.rsi:.1f}) — refusing late chase")
+            trap_stance = "VETO"
+            trap_conf = 0.88
+        elif is_blowoff:
+            trap_flags.append(f"Parabolic blow-off ({favorable_ext:.1f} ATR beyond VWAP + RSI={setup.rsi:.1f})")
             trap_stance = "VETO"
             trap_conf = 0.85
-        elif setup.adx < 15 and setup.setup_type.value == "SESSION_ORB_BREAKOUT":
-            trap_flags.append(f"Weak ADX ({setup.adx:.1f}) increases fakeout probability on breakout")
+        elif is_counter_h1 and setup.quant_score < 85.0:
+            trap_flags.append(f"Counter-H1 ({setup.htf_bias}) trade without extreme capitulation score")
             trap_stance = "VETO"
-            trap_conf = 0.80
+            trap_conf = 0.87
+        elif setup.rvol < 0.80 and setup.setup_type.value != "LIQUIDITY_SWEEP_FVG":
+            trap_flags.append(f"Thin volume (RVOL {setup.rvol:.2f}x) — high false-breakout probability")
+            trap_stance = "VETO"
+            trap_conf = 0.82
+        elif (
+            setup.setup_type.value == "VWAP_EMA_PULLBACK"
+            and setup.efficiency_ratio < 0.24
+            and setup.adx < 21.0
+        ):
+            trap_flags.append(f"Pullback in non-persistent chop (ER={setup.efficiency_ratio:.2f}, ADX={setup.adx:.1f})")
+            trap_stance = "VETO"
+            trap_conf = 0.84
         else:
-            trap_args.append(f"No exhaustion trap detected (RSI={setup.rsi:.1f}, ADX={setup.adx:.1f})")
+            trap_args.append(
+                f"Cleared trap audit (RSI={setup.rsi:.1f}, RVOL={setup.rvol:.2f}x, Spread/SL={setup.spread_to_sl_ratio * 100:.1f}%)"
+            )
 
         op_trap = SpecialistOpinion(
             agent_name="Adversarial_Trap_Critic",
@@ -162,23 +194,27 @@ class MultiAgentCommittee:
             "priority_tier": setup.tier,
             "proposed_side": setup.side.value,
             "setup_type": setup.setup_type.value,
+            "market_regime": setup.regime,
             "quant_score": setup.quant_score,
             "htf_bias": setup.htf_bias,
             "session": setup.session_label,
+            "rvol": setup.rvol,
+            "efficiency_ratio": setup.efficiency_ratio,
             "rr_ratio": setup.rr_ratio,
             "spread_to_sl_ratio": setup.spread_to_sl_ratio,
+            "exit_engine": "3-Stage Profit-Plus BE (+1.15R->+0.20R) + Chandelier ATR Trailing Stop",
             "specialist_opinions": [op.model_dump() for op in opinions],
             "past_settled_lessons": lessons,
         }
         system_msg = (
-            "You are the Head Intraday Gold & FX Trader on a disciplined prop desk. "
-            "Review the computed quantitative setup, the 3 specialist opinions, and past lessons. "
+            "You are the Head Intraday Gold & FX Trader on a disciplined quantitative prop desk. "
+            "Review the regime-classified setup, the 3 specialist opinions, and past lessons. "
             "Output ONLY valid JSON with keys: "
             '{"action": "EXECUTE_LONG"|"EXECUTE_SHORT"|"NO_TRADE", '
             '"grade": "A+"|"A"|"B"|"SKIP", '
             '"confidence": 0.0-1.0, '
             '"thesis_summary": "concise 1-2 sentence rationale"}. '
-            "Remember: NO_TRADE is preferred if Adversarial_Trap_Critic issued a VETO or grade is below A."
+            "STRICT RULE: Always output NO_TRADE if Adversarial_Trap_Critic issued a VETO or grade is below A."
         )
         payload = {
             "model": model_name,
@@ -210,18 +246,18 @@ class MultiAgentCommittee:
         has_veto = any(op.stance == "VETO" for op in opinions)
         avg_conf = sum(op.confidence for op in opinions[:2]) / 2.0
 
-        if has_veto or setup.quant_score < 68.0 or avg_conf < 0.62:
+        if has_veto or setup.quant_score < 74.0 or avg_conf < 0.68:
             action = AgentAction.NO_TRADE
-            grade = SetupGrade.B if setup.quant_score >= 64.0 else SetupGrade.SKIP
+            grade = SetupGrade.B if setup.quant_score >= 68.0 else SetupGrade.SKIP
             veto_notes = [f for op in opinions for f in op.risk_flags]
-            reason = veto_notes[0] if veto_notes else "Setup below A-grade institutional threshold."
+            reason = veto_notes[0] if veto_notes else "Setup below high-conviction A-grade threshold (74+)."
             summary = f"Committee stood aside (NO_TRADE): {reason}"
         else:
             action = AgentAction.EXECUTE_LONG if setup.side == Side.LONG else AgentAction.EXECUTE_SHORT
-            grade = SetupGrade.A_PLUS if (setup.quant_score >= 84.0 and avg_conf >= 0.78) else SetupGrade.A
+            grade = SetupGrade.A_PLUS if (setup.quant_score >= 86.0 and avg_conf >= 0.80) else SetupGrade.A
             summary = (
-                f"{grade.value} {setup.symbol} {setup.side.value} approved ({setup.setup_type.value}): "
-                f"QuantScore={setup.quant_score:.0f}/100, H1={setup.htf_bias}, Net R:R={setup.rr_ratio:.2f}."
+                f"{grade.value} {setup.symbol} {setup.side.value} [{setup.regime}] approved ({setup.setup_type.value}): "
+                f"Score={setup.quant_score:.0f}, H1={setup.htf_bias}, RVOL={setup.rvol:.2f}x, Chandelier Trail armed."
             )
 
         return CommitteeDecision(
@@ -242,6 +278,11 @@ class MultiAgentCommittee:
         t0 = time.perf_counter()
         opinions = self._build_heuristic_opinions(setup)
         lessons = self.memory.get_lessons_for_symbol(setup.symbol, limit=4)
+        has_hard_veto = any(op.stance == "VETO" for op in opinions)
+
+        # If Adversarial Trap Critic issued a hard quantitative VETO, short-circuit immediately in <1ms!
+        if has_hard_veto:
+            return self._evaluate_deterministic(setup, opinions, lessons, t0)
 
         ollama_online, installed_models = await self.check_ollama_health()
         if ollama_online and installed_models:
@@ -257,7 +298,6 @@ class MultiAgentCommittee:
                     conf = float(min(1.0, max(0.0, float(raw.get("confidence", 0.5)))))
                     summary = str(raw.get("thesis_summary", "Ollama Head Trader synthesis completed."))
 
-                    # Enforce consistency: never allow LONG setup to flip to SHORT without scanner trigger
                     if action == AgentAction.EXECUTE_LONG and setup.side != Side.LONG:
                         action = AgentAction.NO_TRADE
                     if action == AgentAction.EXECUTE_SHORT and setup.side != Side.SHORT:

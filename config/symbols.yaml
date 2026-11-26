@@ -15,8 +15,7 @@ priority_tiers:
       max_spread_points: 40    # Reject scalp if spread > $0.40 (4.0 pips)
       max_spread_to_sl_ratio: 0.12
       prime_sessions_utc:
-        - [7, 11]              # London Open & Morning
-        - [12, 17]             # NY Open & London/NY Overlap
+        - [7, 19]              # London Open through NY Morning/Overlap (covers UTC & GMT+2/+3 MT5 servers)
 
   tier_2_high_beta:
     - canonical: "NAS100"
@@ -54,7 +53,7 @@ priority_tiers:
       max_spread_points: 18    # 1.8 pips max spread
       max_spread_to_sl_ratio: 0.12
       prime_sessions_utc:
-        - [7, 16]              # London + NY Overlap
+        - [7, 18]              # London + NY Overlap
 
     - canonical: "GBPUSD"
       aliases: ["GBPUSD", "GBPUSD.m", "GBPUSDm", "GBPUSD.std", "GBPUSD.pro", "GBPUSD.raw", "GBPUSD.ecn", "GBPUSD.a"]
@@ -66,7 +65,7 @@ priority_tiers:
       max_spread_points: 20    # 2.0 pips max spread
       max_spread_to_sl_ratio: 0.12
       prime_sessions_utc:
-        - [7, 16]              # London + NY Overlap
+        - [7, 18]              # London + NY Overlap
 
     - canonical: "USDCAD"
       aliases: ["USDCAD", "USDCAD.m", "USDCADm", "USDCAD.std", "USDCAD.pro", "USDCAD.raw", "USDCAD.ecn", "USDCAD.a"]
@@ -78,4 +77,4 @@ priority_tiers:
       max_spread_points: 22    # 2.2 pips max spread
       max_spread_to_sl_ratio: 0.12
       prime_sessions_utc:
-        - [12, 17]             # NY & CAD Session
+        - [12, 19]             # NY & CAD Session

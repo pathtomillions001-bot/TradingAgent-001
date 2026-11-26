@@ -681,3 +681,51 @@ def test_mission_control_telemetry_and_candles_api(tmp_path: Path) -> None:
         assert cdata["symbol"] == "XAUUSD"
         assert len(cdata["candles"]) == 60
         assert "vwap" in cdata["candles"][-1]
+
+
+def test_three_stage_chandelier_trailing_and_regime_engine(tmp_path: Path) -> None:
+    """Verifies Stage 2 Profit-Plus BE (+1.15R) -> Stage 3 Chandelier ATR Ratchet Trail (+1.55R+) & Asian chop block."""
+    settings = _make_test_settings(tmp_path)
+    engine = TradingAgentEngine(settings=settings)
+    broker = engine.broker
+
+    # 1. Verify Asian off-peak hour (03:00 UTC) is strictly blocked on XAUUSD
+    asian_time = datetime.now(timezone.utc).replace(hour=3)
+    m5 = broker.get_bars("XAUUSD", "M5", 260)
+    h1 = broker.get_bars("XAUUSD", "H1", 120)
+    assert engine.scanner.evaluate_symbol(engine.profiles["XAUUSD"], m5, h1, 18.0, now_utc=asian_time) is None
+
+    # 2. Place a LONG XAUUSD position and step price through Stage 2 (+1.25R) and Stage 3 (+2.20R)
+    q0 = broker.get_quote("XAUUSD")
+    entry = q0.ask
+    init_r = 5.00
+    sl0 = round(entry - init_r, 2)
+    tp0 = round(entry + 3.20 * init_r, 2)
+    rec = broker.place_market_order("XAUUSD", Side.LONG, 0.05, sl=sl0, tp=tp0, initial_risk_usd=25.0)
+    assert rec.success and rec.ticket is not None
+
+    # Push live bar close to +1.25R -> should trigger Stage 2 Profit-Plus Break-Even Shield
+    idx_last = broker._bars["XAUUSD"].index[-1]
+    broker._bars["XAUUSD"].loc[idx_last, "close"] = round(entry + 1.25 * init_r, 2)
+    broker._bars["XAUUSD"].loc[idx_last, "high"] = round(entry + 1.28 * init_r, 2)
+    acts_be = engine.risk.manage_open_positions_intraday(broker)
+    pos_after_be = broker.get_open_positions()[0]
+    assert len(acts_be) == 1
+    assert pos_after_be.be_moved is True
+    assert pos_after_be.sl > entry
+    be_sl = pos_after_be.sl
+
+    # Push live bar high/close to +2.30R -> should trigger Stage 3 Chandelier ATR Volatility Ratchet higher than BE SL!
+    broker._bars["XAUUSD"].loc[idx_last, "close"] = round(entry + 2.25 * init_r, 2)
+    broker._bars["XAUUSD"].loc[idx_last, "high"] = round(entry + 2.35 * init_r, 2)
+    acts_trail = engine.risk.manage_open_positions_intraday(broker)
+    pos_after_trail = broker.get_open_positions()[0]
+    assert len(acts_trail) == 1
+    assert "Chandelier ATR Trail" in acts_trail[0]
+    assert pos_after_trail.sl > be_sl
+    trailed_sl = pos_after_trail.sl
+
+    # Shallow pullback to +1.80R -> Chandelier SL must NEVER move backward!
+    broker._bars["XAUUSD"].loc[idx_last, "close"] = round(entry + 1.80 * init_r, 2)
+    engine.risk.manage_open_positions_intraday(broker)
+    assert broker.get_open_positions()[0].sl == trailed_sl
